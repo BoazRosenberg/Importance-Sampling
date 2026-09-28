@@ -1,0 +1,6 @@
+{
+  "name": "importance-sampling-package",
+  "description": "Modern Python package and interactive workbench for Iterative Importance Sampling (IIS) hierarchical model estimation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
