@@ -1,21 +1,50 @@
 """Interactive reporting and diagnostic visualizations for importance_sampling.
 
-Generates interactive Plotly reports and dashboards for inspecting:
+Generates polished, production-grade interactive reports and dashboards for inspecting:
 1. Model Fit & Convergence (Total Evidence, BIC, and subject-level evidence trajectories).
-2. Hyperparameter Evolution across iterations (3-column grid, solid mean line, shaded +/- 1 SD area).
-3. Individual Subject Posterior Means (separate scatter plots with X = parameter mean, Y = subject number).
-4. Multinormal Correlation / Covariance Matrix Heatmap.
+2. Model Parameters Summary Table.
+3. Hyperparameter Evolution Grid (3 plots per row, solid mean line, shaded +/- 1 SD area).
+4. Individual Subject Posterior Means (separate scatter plot per parameter: Y = subject #, X = parameter mean).
+5. Multinormal Parameter Correlation / Covariance Matrix Heatmap.
 """
 
 from __future__ import annotations
 
 import math
+import os
+import tempfile
+import webbrowser
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
 if TYPE_CHECKING:
     from importance_sampling.sampler import Sampler
+
+
+class ReportDashboard:
+    """A self-contained, interactive HTML dashboard for model diagnostics."""
+
+    def __init__(self, html_content: str, figure: Any = None):
+        self.html_content = html_content
+        self.figure = figure
+
+    def _repr_html_(self) -> str:
+        """Render rich interactive HTML automatically in Jupyter and Google Colab."""
+        return self.html_content
+
+    def save(self, filename: str) -> str:
+        """Save the dashboard to an HTML file."""
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(self.html_content)
+        return os.path.abspath(filename)
+
+    def show(self) -> None:
+        """Open the dashboard in the default web browser."""
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".html", encoding="utf-8") as f:
+            f.write(self.html_content)
+            temp_path = f.name
+        webbrowser.open(f"file://{temp_path}")
 
 
 def create_report(
@@ -25,41 +54,40 @@ def create_report(
     transformed: bool = True,
     params_to_plot: Optional[Sequence[str]] = None,
     renderer: Optional[str] = None,
-) -> Any:
-    """Generate an interactive report widget for model diagnostics and results.
+) -> ReportDashboard:
+    """Generate a clean, beautiful, interactive HTML diagnostic report for a fitted model.
 
-    Layout Order:
-    1. Model Fit & Convergence: Total Evidence & BIC, plus Subject-Level Spaghetti Plot.
-    2. Hyperparameter Evolution Grid: 3 plots per row, each showing mean line and shaded +/- 1 SD.
-    3. Individual Subject Posterior Means: Separate scatter plot per parameter (X = parameter value, Y = subject number).
-    4. Multinormal Parameter Correlation / Covariance Heatmap.
+    Fixes common Plotly issues by generating a modular, card-based dashboard layout:
+    - No overlapping titles or pooled, cluttered legends.
+    - Each plot has its own dedicated card and axes.
+    - Responsive 3-column grids for Hyperparameter Evolution and Subject Posterior Means.
+    - Renders natively in Jupyter/Colab via `_repr_html_`, opens in browser via `.show()`,
+      or exports to a standalone HTML file via `filename="report.html"`.
 
     Parameters
     ----------
     sampler : Sampler
         A fitted Sampler instance.
     filename : Optional[str], default=None
-        If provided (e.g. 'model_report.html'), exports a self-contained, interactive
-        HTML report that can be opened in any web browser without a Python runtime.
+        Path to save the self-contained HTML report (e.g., 'model_report.html').
     show : bool, default=True
-        Whether to display the interactive figure in the current environment
-        (e.g., Jupyter notebook, Google Colab, or browser).
+        Whether to open the report in the default browser or notebook environment.
     transformed : bool, default=True
-        If True, displays hyperparameters transformed into their valid domain bounds.
+        If True, displays parameters transformed into their valid domain bounds.
         If False, displays parameters in latent standard normal space.
     params_to_plot : Optional[Sequence[str]], default=None
-        Subset of parameter keys to visualize in evolution and subject means. If None, plots all parameters.
+        Subset of parameter keys to visualize in evolution and subject plots. If None, plots all parameters.
     renderer : Optional[str], default=None
-        Plotly renderer to use when displaying the figure (e.g., 'browser', 'notebook', 'colab').
+        Plotly renderer option if displaying a figure directly.
 
     Returns
     -------
-    plotly.graph_objects.Figure
-        The interactive Plotly Figure object containing the multi-panel report.
+    ReportDashboard
+        A dashboard object supporting `.save()`, `.show()`, `.html_content`, and notebook rendering.
     """
     try:
         import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
+        from plotly.io import to_html
     except ImportError as exc:
         raise ImportError(
             "Plotly is required for interactive reports. Install it via: pip install plotly"
@@ -67,86 +95,34 @@ def create_report(
 
     all_params = sampler.params
     active_params = [p for p in params_to_plot if p in all_params] if params_to_plot else all_params
-    n_active = len(active_params)
-    n_all = len(all_params)
-
     iters = list(range(len(sampler.hyper_params_list)))
     fit_iters = list(range(len(sampler.evidence)))
 
-    # Grid calculations (3 columns for parameter plots)
-    hp_cols = min(3, max(1, n_active))
-    hp_rows = math.ceil(n_active / hp_cols)
+    palette = [
+        "#0969da",
+        "#1a7f37",
+        "#8250df",
+        "#cf222e",
+        "#bf8700",
+        "#0550ae",
+        "#116329",
+        "#5a32a3",
+        "#82071e",
+        "#7d4e00",
+    ]
 
-    subj_cols = min(3, max(1, n_active))
-    subj_rows = math.ceil(n_active / subj_cols)
-
-    # Total rows:
-    # Row 1: Model Fit (2 columns: Evidence & BIC, and Subject Spaghetti)
-    # Rows 2 .. (1 + hp_rows): Hyperparameter Evolution Grid (3 columns)
-    # Rows (2 + hp_rows) .. (1 + hp_rows + subj_rows): Subject Means Grid (3 columns)
-    # Final Row: Correlation / Covariance Heatmap (spanning all 3 columns)
-    total_rows = 1 + hp_rows + subj_rows + 1
-
-    subplot_titles: List[str] = []
-
-    # Row 1: Model Fit titles
-    subplot_titles.extend(["Model Fit: Total Evidence & BIC", "Subject-Level Evidence Trajectories", ""])
-
-    # Evolution titles (3 per row)
-    space_label = "Transformed" if transformed else "Latent Space"
-    for r in range(hp_rows):
-        for c in range(3):
-            p_idx = r * hp_cols + c
-            if c < hp_cols and p_idx < n_active:
-                subplot_titles.append(f"Evolution: {active_params[p_idx]} ({space_label})")
-            else:
-                subplot_titles.append("")
-
-    # Subject Means titles (3 per row)
-    for r in range(subj_rows):
-        for c in range(3):
-            p_idx = r * subj_cols + c
-            if c < subj_cols and p_idx < n_active:
-                subplot_titles.append(f"Subject Means: {active_params[p_idx]}")
-            else:
-                subplot_titles.append("")
-
-    # Correlation Matrix title
-    subplot_titles.extend(["Multinormal Correlation Matrix (Latent Space)", "", ""])
-
-    # Build specs for make_subplots (3 columns wide)
-    specs: List[List[Dict[str, Any]]] = []
-
-    # Row 1: Evidence & BIC (Col 1-2), Spaghetti (Col 3)
-    specs.append([{"colspan": 2, "secondary_y": True}, None, {}])
-
-    # Evolution Rows
-    for _ in range(hp_rows):
-        specs.append([{}, {}, {}])
-
-    # Subject Means Rows
-    for _ in range(subj_rows):
-        specs.append([{}, {}, {}])
-
-    # Correlation Heatmap Row (Col 1-3)
-    specs.append([{"colspan": 3}, None, None])
-
-    fig = make_subplots(
-        rows=total_rows,
-        cols=3,
-        specs=specs,
-        subplot_titles=subplot_titles,
-        vertical_spacing=0.045,
-        horizontal_spacing=0.065,
-    )
-
-    palette = ["#0969da", "#1a7f37", "#8250df", "#cf222e", "#bf8700", "#0550ae", "#116329", "#5a32a3", "#82071e", "#7d4e00"]
+    plotly_config = {
+        "responsive": True,
+        "displayModeBar": True,
+        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        "displaylogo": False,
+    }
 
     # -------------------------------------------------------------------------
-    # 1. MODEL FIT (Row 1)
+    # 1. PLOT: Total Evidence & BIC
     # -------------------------------------------------------------------------
-    # Col 1: Total Evidence & BIC
-    fig.add_trace(
+    fig_fit = go.Figure()
+    fig_fit.add_trace(
         go.Scatter(
             x=fit_iters,
             y=sampler.evidence,
@@ -154,15 +130,12 @@ def create_report(
             line=dict(color="#0969da", width=2.5),
             marker=dict(size=5.5),
             name="Total Evidence (LL)",
-            hovertemplate="Iteration %{x}<br><b>Evidence</b>: %{y:.2f}<extra></extra>",
-        ),
-        row=1,
-        col=1,
-        secondary_y=False,
+            hovertemplate="Iter %{x}<br><b>Evidence</b>: %{y:.2f}<extra></extra>",
+        )
     )
 
     if sampler.BIC:
-        fig.add_trace(
+        fig_fit.add_trace(
             go.Scatter(
                 x=fit_iters,
                 y=sampler.BIC,
@@ -170,59 +143,94 @@ def create_report(
                 line=dict(color="#cf222e", width=2, dash="dash"),
                 marker=dict(size=5),
                 name="BIC",
-                hovertemplate="Iteration %{x}<br><b>BIC</b>: %{y:.2f}<extra></extra>",
-            ),
-            row=1,
-            col=1,
-            secondary_y=True,
+                yaxis="y2",
+                hovertemplate="Iter %{x}<br><b>BIC</b>: %{y:.2f}<extra></extra>",
+            )
         )
 
-    fig.update_xaxes(title_text="Iteration", row=1, col=1, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="Total Evidence", row=1, col=1, secondary_y=False, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="BIC", row=1, col=1, secondary_y=True, gridcolor="#eaeef2")
+    fig_fit.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=55, r=55, t=20, b=40),
+        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+        yaxis=dict(title=dict(text="Total Evidence", font=dict(color="#0969da")), gridcolor="#eaeef2"),
+        yaxis2=dict(
+            title=dict(text="BIC", font=dict(color="#cf222e")),
+            overlaying="y",
+            side="right",
+            gridcolor="rgba(0,0,0,0)",
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.02,
+            y=1.05,
+            xanchor="left",
+            yanchor="bottom",
+            bgcolor="rgba(255,255,255,0.8)",
+            font=dict(size=11),
+        ),
+        hovermode="x unified",
+    )
+    div_fit = to_html(fig_fit, include_plotlyjs=False, full_html=False, config=plotly_config)
 
-    # Col 3: Subject Spaghetti Curves
+    # -------------------------------------------------------------------------
+    # 2. PLOT: Subject Evidence Spaghetti Plot
+    # -------------------------------------------------------------------------
+    fig_spaghetti = go.Figure()
     if sampler.subj_evidence:
-        subj_matrix = np.array(sampler.subj_evidence)
+        subj_mat = np.array(sampler.subj_evidence)
         for s in range(sampler.n_subjects):
-            fig.add_trace(
+            fig_spaghetti.add_trace(
                 go.Scatter(
                     x=fit_iters,
-                    y=subj_matrix[:, s],
+                    y=subj_mat[:, s],
                     mode="lines",
                     line=dict(width=1, color="rgba(89, 99, 110, 0.35)"),
                     showlegend=False,
                     name=f"Subj {s}",
-                    hovertemplate=f"Subj {s}<br>Iteration %{{x}}: %{{y:.2f}}<extra></extra>",
-                ),
-                row=1,
-                col=3,
+                    hovertemplate=f"Subj {s}<br>Iter %{{x}}: %{{y:.2f}}<extra></extra>",
+                )
             )
 
-        mean_subj_ev = np.mean(subj_matrix, axis=1)
-        fig.add_trace(
+        mean_ev = np.mean(subj_mat, axis=1)
+        fig_spaghetti.add_trace(
             go.Scatter(
                 x=fit_iters,
-                y=mean_subj_ev,
+                y=mean_ev,
                 mode="lines+markers",
                 line=dict(color="#1f2328", width=2.5),
                 marker=dict(size=5),
-                name="Mean Subj Evidence",
-                hovertemplate="Iteration %{x}<br><b>Mean Subj Evidence</b>: %{y:.2f}<extra></extra>",
-            ),
-            row=1,
-            col=3,
+                name="Mean Subj Ev",
+                hovertemplate="Iter %{x}<br><b>Mean Subj Ev</b>: %{y:.2f}<extra></extra>",
+            )
         )
 
-    fig.update_xaxes(title_text="Iteration", row=1, col=3, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="Subj Evidence", row=1, col=3, gridcolor="#eaeef2")
+    fig_spaghetti.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=55, r=20, t=20, b=40),
+        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+        yaxis=dict(title="Subject Log Likelihood", gridcolor="#eaeef2"),
+        legend=dict(
+            orientation="h",
+            x=0.02,
+            y=1.05,
+            xanchor="left",
+            yanchor="bottom",
+            bgcolor="rgba(255,255,255,0.8)",
+            font=dict(size=11),
+        ),
+        hovermode="closest",
+    )
+    div_spaghetti = to_html(fig_spaghetti, include_plotlyjs=False, full_html=False, config=plotly_config)
 
     # -------------------------------------------------------------------------
-    # 2. HYPERPARAMETER EVOLUTION (Rows 2 .. 1 + hp_rows, 3 columns)
+    # 3. PLOTS: Hyperparameter Evolution (One Clean Plot per Parameter)
     # -------------------------------------------------------------------------
+    evolution_divs: List[Dict[str, Any]] = []
+    space_label = "Transformed Space" if transformed else "Latent Normal Space"
+
     for idx, param in enumerate(active_params):
-        r = 1 + (idx // hp_cols) + 1
-        c = (idx % hp_cols) + 1
         color = palette[idx % len(palette)]
         t_func = sampler.transformations[param] if transformed else (lambda x: x)
 
@@ -233,71 +241,79 @@ def create_report(
         upper_plot = t_func(means_raw + sds_raw)
         lower_plot = t_func(means_raw - sds_raw)
 
-        # Upper bound (invisible line for fill anchor)
-        fig.add_trace(
+        fig_p = go.Figure()
+
+        # Ribbon upper bound
+        fig_p.add_trace(
             go.Scatter(
                 x=iters,
                 y=upper_plot,
                 mode="lines",
                 line=dict(width=0),
                 showlegend=False,
-                name=f"{param} +1 SD",
                 hoverinfo="skip",
-            ),
-            row=r,
-            col=c,
+            )
         )
 
-        fig.add_trace(
+        # Ribbon lower bound with fill
+        fig_p.add_trace(
             go.Scatter(
                 x=iters,
                 y=lower_plot,
                 mode="lines",
                 line=dict(width=0),
                 fill="tonexty",
-                fillcolor="rgba(9, 105, 218, 0.16)",
-                name=f"{param} ±1 SD",
+                fillcolor="rgba(9, 105, 218, 0.15)",
                 showlegend=False,
-                hovertemplate=f"<b>{param} -1 SD</b>: %{{y:.4f}}<extra></extra>",
-            ),
-            row=r,
-            col=c,
+                name="±1 SD",
+                hovertemplate="Iter %{x}<br><b>-1 SD</b>: %{y:.4f}<extra></extra>",
+            )
         )
 
-        fig.add_trace(
+        # Mean line
+        fig_p.add_trace(
             go.Scatter(
                 x=iters,
                 y=means_plot,
                 mode="lines+markers",
                 line=dict(color=color, width=2.5),
-                marker=dict(size=4.5, color=color),
-                name=f"{param} Mean",
+                marker=dict(size=5, color=color),
                 showlegend=False,
-                hovertemplate=f"Iteration %{{x}}<br><b>{param} Mean</b>: %{{y:.4f}}<extra></extra>",
-            ),
-            row=r,
-            col=c,
+                name=f"{param} Mean",
+                hovertemplate=f"Iter %{{x}}<br><b>{param} Mean</b>: %{{y:.4f}}<extra></extra>",
+            )
         )
 
-        fig.update_xaxes(title_text="Iteration", row=r, col=c, gridcolor="#eaeef2")
-        fig.update_yaxes(title_text=param, row=r, col=c, gridcolor="#eaeef2")
+        fig_p.update_layout(
+            template="plotly_white",
+            height=210,
+            margin=dict(l=45, r=15, t=15, b=35),
+            xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+            yaxis=dict(title=param, gridcolor="#eaeef2"),
+            hovermode="closest",
+        )
+
+        div_p = to_html(fig_p, include_plotlyjs=False, full_html=False, config=plotly_config)
+        evolution_divs.append({
+            "param": param,
+            "final_mean": means_plot[-1],
+            "div": div_p,
+        })
 
     # -------------------------------------------------------------------------
-    # 3. INDIVIDUAL SUBJECT POSTERIOR MEANS (Rows 2 + hp_rows .. , 3 columns)
-    # X-axis = parameter value, Y-axis = Subject index/number
+    # 4. PLOTS: Individual Subject Posterior Means (Y = Subj #, X = Value)
     # -------------------------------------------------------------------------
-    subj_start_row = 1 + hp_rows + 1
+    subject_divs: List[Dict[str, Any]] = []
     subj_indices = list(range(sampler.n_subjects))
 
     if sampler.mean_params:
         for idx, param in enumerate(active_params):
-            r = subj_start_row + (idx // subj_cols)
-            c = (idx % subj_cols) + 1
             color = palette[idx % len(palette)]
             t_func = sampler.transformations[param] if transformed else (lambda x: x)
             vals = [t_func(v) for v in sampler.mean_params[param]]
 
-            fig.add_trace(
+            fig_s = go.Figure()
+            fig_s.add_trace(
                 go.Scatter(
                     x=vals,
                     y=subj_indices,
@@ -305,36 +321,43 @@ def create_report(
                     marker=dict(
                         size=8,
                         color=color,
-                        line=dict(color="#1f2328", width=1),
+                        line=dict(color="#ffffff", width=1),
                         opacity=0.85,
                     ),
-                    name=f"Subj {param}",
                     showlegend=False,
                     hovertemplate=f"<b>Subject %{{y}}</b><br>{param}: %{{x:.4f}}<extra></extra>",
+                )
+            )
+
+            fig_s.update_layout(
+                template="plotly_white",
+                height=210,
+                margin=dict(l=45, r=15, t=15, b=35),
+                xaxis=dict(title=f"{param} Mean", gridcolor="#eaeef2"),
+                yaxis=dict(
+                    title="Subject #",
+                    gridcolor="#eaeef2",
+                    dtick=max(1, sampler.n_subjects // 5),
                 ),
-                row=r,
-                col=c,
+                hovermode="closest",
             )
 
-            fig.update_xaxes(title_text=f"{param} Mean", row=r, col=c, gridcolor="#eaeef2")
-            fig.update_yaxes(
-                title_text="Subject #",
-                row=r,
-                col=c,
-                gridcolor="#eaeef2",
-                tickmode="linear",
-                dtick=max(1, sampler.n_subjects // 8),
-            )
+            div_s = to_html(fig_s, include_plotlyjs=False, full_html=False, config=plotly_config)
+            subject_divs.append({
+                "param": param,
+                "min": min(vals),
+                "max": max(vals),
+                "div": div_s,
+            })
 
     # -------------------------------------------------------------------------
-    # 4. MULTINORMAL CORRELATION HEATMAP (Final Row, Col 1-3)
+    # 5. PLOT: Multinormal Correlation Matrix Heatmap
     # -------------------------------------------------------------------------
-    corr_row = total_rows
     cor_matrix = sampler.cor_matrix
     text_annotations = [[f"{val:.2f}" for val in row] for row in cor_matrix]
 
-    fig.add_trace(
-        go.Heatmap(
+    fig_corr = go.Figure(
+        data=go.Heatmap(
             z=cor_matrix,
             x=all_params,
             y=all_params,
@@ -344,54 +367,298 @@ def create_report(
             text=text_annotations,
             texttemplate="%{text}",
             textfont=dict(size=12, color="#1f2328"),
-            colorbar=dict(
-                title="Correlation",
-                len=0.2,
-                y=0.08,
-                yanchor="bottom",
-            ),
-            hovertemplate="X: %{x}<br>Y: %{y}<br><b>r</b>: %{z:.3f}<extra></extra>",
-            name="Correlation Matrix",
-            showlegend=False,
-        ),
-        row=corr_row,
-        col=1,
+            colorbar=dict(title="r", len=0.8, thickness=16),
+            hovertemplate="X: %{x}<br>Y: %{y}<br><b>Correlation</b>: %{z:.3f}<extra></extra>",
+            showscale=True,
+        )
     )
-    fig.update_xaxes(title_text="Parameter", row=corr_row, col=1, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="Parameter", row=corr_row, col=1, gridcolor="#eaeef2")
+
+    fig_corr.update_layout(
+        template="plotly_white",
+        height=360,
+        margin=dict(l=60, r=20, t=20, b=50),
+        xaxis=dict(title="Parameter", gridcolor="#eaeef2"),
+        yaxis=dict(title="Parameter", gridcolor="#eaeef2"),
+    )
+    div_corr = to_html(fig_corr, include_plotlyjs=False, full_html=False, config=plotly_config)
 
     # -------------------------------------------------------------------------
-    # Overall Layout & Height
+    # HTML Table of Model Parameters
     # -------------------------------------------------------------------------
-    total_height = 300 + hp_rows * 240 + subj_rows * 240 + 380
-    fig.update_layout(
-        title=dict(
-            text=f"<b>importance_sampling Diagnostic Report</b>: {sampler.model_name}<br>"
-            f"<sup>Subjects: {sampler.n_subjects} | Parameters: {n_all} | Iterations: {sampler.iterations} | "
-            f"Evidence: {round(sampler.evidence[-1], 2) if sampler.evidence else 'N/A'} | "
-            f"BIC: {round(sampler.BIC[-1], 2) if sampler.BIC else 'N/A'}</sup>",
-            x=0.03,
-            y=0.99,
-            xanchor="left",
-            yanchor="top",
-            font=dict(size=18, color="#1f2328", family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"),
-        ),
-        height=total_height,
-        template="plotly_white",
-        hovermode="closest",
-        margin=dict(l=60, r=40, t=110, b=60),
-    )
+    table_rows_html = ""
+    for p in all_params:
+        t_func = sampler.transformations[p] if transformed else (lambda x: x)
+        raw_m = sampler.hyper_params[p]["mean"]
+        raw_sd = sampler.hyper_params[p]["sd"]
+        fitted_mean = t_func(raw_m)
+        fitted_sd = abs(t_func(raw_m + raw_sd) - t_func(raw_m - raw_sd)) / 2.0
+        lower_bound = t_func(raw_m - raw_sd)
+        upper_bound = t_func(raw_m + raw_sd)
+
+        table_rows_html += f"""
+        <tr style="border-bottom: 1px solid #eaeef2;">
+            <td style="padding: 10px 14px; font-weight: 600; font-family: monospace;">{p}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #0969da;">{fitted_mean:.4f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{fitted_sd:.4f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">[{lower_bound:.3f}, {upper_bound:.3f}]</td>
+        </tr>
+        """
+
+    # -------------------------------------------------------------------------
+    # Assemble Clean Standalone HTML Document
+    # -------------------------------------------------------------------------
+    final_evidence_str = f"{sampler.evidence[-1]:.2f}" if sampler.evidence else "N/A"
+    final_bic_str = f"{sampler.BIC[-1]:.2f}" if sampler.BIC else "N/A"
+
+    evolution_cards_html = "".join([
+        f"""
+        <div style="background: #ffffff; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; font-family: monospace; margin-bottom: 4px;">
+                <span style="font-weight: 700; color: #1f2328;">{c['param']}</span>
+                <span style="color: #0969da; font-weight: 600;">mean = {c['final_mean']:.4f}</span>
+            </div>
+            {c['div']}
+        </div>
+        """
+        for c in evolution_divs
+    ])
+
+    subject_cards_html = "".join([
+        f"""
+        <div style="background: #ffffff; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; font-family: monospace; margin-bottom: 4px;">
+                <span style="font-weight: 700; color: #1f2328;">{c['param']}</span>
+                <span style="color: #1a7f37; font-weight: 600;">range: [{c['min']:.2f}, {c['max']:.2f}]</span>
+            </div>
+            {c['div']}
+        </div>
+        """
+        for c in subject_divs
+    ])
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Report: {sampler.model_name}</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f6f8fa;
+            color: #1f2328;
+            padding: 24px;
+            line-height: 1.5;
+        }}
+        .container {{
+            max-width: 1140px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }}
+        .card {{
+            background: #ffffff;
+            border: 1px solid #d1d9e0;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(31,35,40,0.04);
+        }}
+        .card-header {{
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #eaeef2;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .card-title {{
+            font-size: 15px;
+            font-weight: 700;
+            color: #1f2328;
+        }}
+        .card-subtitle {{
+            font-size: 12px;
+            color: #59636e;
+            margin-top: 2px;
+        }}
+        .grid-2 {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }}
+        .grid-3 {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+        }}
+        @media (max-width: 768px) {{
+            .grid-2 {{ grid-template-columns: 1fr; }}
+            .grid-3 {{ grid-template-columns: 1fr; }}
+        }}
+        .badge {{
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(9, 105, 218, 0.1);
+            color: #0969da;
+            border: 1px solid rgba(9, 105, 218, 0.2);
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 12px;
+        }}
+        th {{
+            background-color: #f6f8fa;
+            color: #59636e;
+            font-weight: 600;
+            padding: 10px 14px;
+            border-bottom: 1px solid #d1d9e0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 1. HEADER HERO CARD -->
+        <div class="card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+            <div>
+                <div style="margin-bottom: 6px;">
+                    <span class="badge">Model Diagnostics Report</span>
+                </div>
+                <h1 style="font-size: 22px; font-weight: 800; color: #1f2328;">{sampler.model_name}</h1>
+                <p style="font-size: 13px; color: #59636e; margin-top: 2px;">
+                    <strong>{sampler.n_subjects}</strong> Subjects • 
+                    <strong>{len(all_params)}</strong> Parameters • 
+                    <strong>{sampler.iterations}</strong> Iterations • 
+                    Fit Time: {sampler.total_fit_time:.2f}s
+                </p>
+            </div>
+            <div style="display: flex; gap: 12px; font-family: monospace;">
+                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
+                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Total Evidence</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #0969da;">{final_evidence_str}</div>
+                </div>
+                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
+                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Final BIC</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #1a7f37;">{final_bic_str}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. MODEL FIT: EVIDENCE & BIC + SUBJECT SPAGHETTI -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Total Model Evidence &amp; BIC</div>
+                        <div class="card-subtitle">Dual-axis evolution across estimation iterations</div>
+                    </div>
+                </div>
+                {div_fit}
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Subject-Level Evidence Trajectories</div>
+                        <div class="card-subtitle">Per-subject log marginal likelihood convergence paths</div>
+                    </div>
+                </div>
+                {div_spaghetti}
+            </div>
+        </div>
+
+        <!-- 3. PARAMETERS SUMMARY TABLE -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">Model Parameters Summary</div>
+                    <div class="card-subtitle">Fitted population mean and credible ±1 SD intervals ({space_label})</div>
+                </div>
+            </div>
+            <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Parameter Key</th>
+                            <th>Fitted Mean (μ)</th>
+                            <th>Fitted SD (σ)</th>
+                            <th>±1 SD Credible Bound</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {table_rows_html}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 4. HYPERPARAMETER EVOLUTION GRID (3 PER ROW) -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">Hyperparameter Evolution Grid</div>
+                    <div class="card-subtitle">Dedicated subplots (3 per row). Solid line = population mean; shaded ribbon = ±1 SD</div>
+                </div>
+            </div>
+            <div class="grid-3">
+                {evolution_cards_html}
+            </div>
+        </div>
+
+        <!-- 5. INDIVIDUAL SUBJECT POSTERIOR MEANS (3 PER ROW) -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">Individual Subject Posterior Means</div>
+                    <div class="card-subtitle">Scatter plots: Y-axis = Subject Number, X-axis = Parameter Posterior Mean</div>
+                </div>
+            </div>
+            <div class="grid-3">
+                {subject_cards_html}
+            </div>
+        </div>
+
+        <!-- 6. MULTINORMAL CORRELATION MATRIX HEATMAP -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">Multinormal Parameter Correlation Matrix</div>
+                    <div class="card-subtitle">Correlation / covariance between all parameters in latent space</div>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: center;">
+                <div style="width: 100%; max-width: 600px;">
+                    {div_corr}
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+    dashboard = ReportDashboard(html_content, figure=fig_fit)
 
     if filename:
-        fig.write_html(filename, include_plotlyjs="cdn", full_html=True)
+        dashboard.save(filename)
 
     if show:
-        if renderer:
-            fig.show(renderer=renderer)
-        else:
-            fig.show()
+        # If in a Jupyter/Colab notebook environment, display via IPython HTML
+        try:
+            from IPython.display import HTML, display
+            display(HTML(html_content))
+        except (ImportError, Exception):
+            # Otherwise open cleanly in browser
+            dashboard.show()
 
-    return fig
+    return dashboard
 
 
 # -----------------------------------------------------------------------------
@@ -405,66 +672,40 @@ def compare_models(
     show: bool = True,
     compare_params: Optional[Sequence[str]] = None,
     renderer: Optional[str] = None,
-) -> Any:
+) -> ReportDashboard:
     """Compare multiple computational models on likelihood (evidence), BIC, and parameters.
 
     Visualizes:
-    1. Evolution Trajectories:
-       - Total Evidence (log likelihood) across iterations for all models.
-       - BIC across iterations for all models.
-    2. Final Fit Comparison:
-       - Grouped bar plot comparing Final Total Evidence and Final BIC.
-       - Complete comparative table with:
-         * Model Name
-         * Number of parameters (k)
-         * Final Total Evidence
-         * Final BIC
-         * ΔBIC (difference relative to the best model, lower is better)
-         * Best Model Rank
-    3. Parameter Comparison (Optional):
-       - If `compare_params` is specified (e.g. ['lr', 'beta']), includes subplots
-         comparing population mean ± 1 SD and subject posterior distributions
-         across the models sharing those parameters.
+    1. Evolution Trajectories: Total Evidence and BIC across iterations for all models.
+    2. Final Fit Comparison: Side-by-side grouped bar chart and ranking table with ΔBIC.
+    3. Parameter Comparison: Dedicated visual comparison across models.
 
     Parameters
     ----------
     samplers : Union[Sequence[Sampler], Dict[str, Sampler]]
-        Two or more fitted Sampler instances, either as a list or a dict mapping names to samplers.
+        Two or more fitted Sampler instances.
     filename : Optional[str], default=None
-        If provided (e.g. 'model_comparison.html'), saves a self-contained interactive HTML report.
+        If provided, saves as a self-contained HTML file.
     show : bool, default=True
-        Whether to display the interactive figure in the current environment.
+        Whether to display the interactive figure or open in browser.
     compare_params : Optional[Sequence[str]], default=None
-        Optional list of parameter keys to compare across models.
+        List of parameter keys to compare across models.
     renderer : Optional[str], default=None
-        Plotly renderer option (e.g. 'browser', 'notebook', 'colab').
+        Plotly renderer option.
 
     Returns
     -------
-    plotly.graph_objects.Figure
-        The interactive Plotly Figure object containing the comparative report.
-
-    Examples
-    --------
-    >>> from importance_sampling import compare_models
-    >>> compare_models([sampler_standard, sampler_dual_lr, sampler_perseveration])
-    >>>
-    >>> # Save to standalone HTML file with parameter comparisons
-    >>> compare_models(
-    ...     [m1, m2, m3],
-    ...     filename="comparison_report.html",
-    ...     compare_params=["lr", "inv_temp"],
-    ... )
+    ReportDashboard
+        A dashboard object with `.save()`, `.show()`, and notebook rendering.
     """
     try:
         import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
+        from plotly.io import to_html
     except ImportError as exc:
         raise ImportError(
             "Plotly is required for model comparison reports. Install it via: pip install plotly"
         ) from exc
 
-    # Normalize models dictionary
     if isinstance(samplers, dict):
         model_dict = samplers
     else:
@@ -490,7 +731,13 @@ def compare_models(
         "#7d4e00",
     ]
 
-    # Calculate final metrics for each model
+    plotly_config = {
+        "responsive": True,
+        "displayModeBar": True,
+        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        "displaylogo": False,
+    }
+
     final_evidence: List[float] = []
     final_bic: List[float] = []
     n_params_list: List[int] = []
@@ -503,12 +750,10 @@ def compare_models(
         final_bic.append(bic)
         n_params_list.append(len(m.params))
 
-    # Calculate delta BIC relative to the minimum (best) BIC
     valid_bics = [b for b in final_bic if not np.isnan(b)]
     best_bic = min(valid_bics) if valid_bics else 0.0
     delta_bic = [b - best_bic if not np.isnan(b) else np.nan for b in final_bic]
 
-    # Ranking by BIC (lowest BIC = rank 1)
     sorted_indices = sorted(
         range(len(model_names)),
         key=lambda i: final_bic[i] if not np.isnan(final_bic[i]) else float("inf"),
@@ -517,250 +762,307 @@ def compare_models(
     for rank, idx in enumerate(sorted_indices, start=1):
         ranks[idx] = rank
 
-    # Parameter comparison setup
-    include_params = compare_params is not None and len(compare_params) > 0
-    param_rows = len(compare_params) if include_params and compare_params else 0
-
-    # Layout structure:
-    # Row 1: Evolution Trajectories (Col 1: Evidence Evolution, Col 2: BIC Evolution)
-    # Row 2: Final Fit Comparison (Col 1: Bar Plot, Col 2: Table Summary)
-    # Rows 3..3+param_rows: Parameter Comparison (if compare_params given)
-    total_rows = 2 + param_rows
-
-    subplot_titles = [
-        "Total Evidence Evolution Across Iterations",
-        "BIC Evolution Across Iterations (Lower is Better)",
-        "Final Model Evidence & BIC Comparison",
-        "Final Model Comparison Table",
-    ]
-
-    if include_params and compare_params:
-        for p in compare_params:
-            subplot_titles.append(f"Parameter Comparison across Models: {p}")
-            subplot_titles.append("")
-
-    specs: List[List[Dict[str, Any]]] = [
-        [{}, {}],
-        [{}, {"type": "table"}],
-    ]
-
-    for _ in range(param_rows):
-        specs.append([{"colspan": 2}, None])
-
-    fig = make_subplots(
-        rows=total_rows,
-        cols=2,
-        specs=specs,
-        subplot_titles=subplot_titles,
-        vertical_spacing=0.08,
-        horizontal_spacing=0.08,
-    )
-
-    # -------------------------------------------------------------------------
-    # 1. EVOLUTION PLOTS (Row 1)
-    # -------------------------------------------------------------------------
+    # 1. Total Evidence Evolution Plot
+    fig_ev = go.Figure()
     for idx, name in enumerate(model_names):
         m = model_dict[name]
-        color = palette[idx % len(palette)]
-        ev_iters = list(range(len(m.evidence)))
-
-        # Evidence trajectory
-        fig.add_trace(
+        fig_ev.add_trace(
             go.Scatter(
-                x=ev_iters,
+                x=list(range(len(m.evidence))),
                 y=m.evidence,
                 mode="lines+markers",
-                name=f"{name} (Ev)",
-                line=dict(color=color, width=2.5),
+                name=name,
+                line=dict(color=palette[idx % len(palette)], width=2.5),
                 marker=dict(size=4),
-                hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: Evidence = %{{y:.2f}}<extra></extra>",
-            ),
-            row=1,
-            col=1,
+                hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: Ev = %{{y:.2f}}<extra></extra>",
+            )
         )
+    fig_ev.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=50, r=20, t=20, b=40),
+        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+        yaxis=dict(title="Total Evidence", gridcolor="#eaeef2"),
+        legend=dict(orientation="h", y=1.08, x=0.02),
+        hovermode="x unified",
+    )
+    div_ev = to_html(fig_ev, include_plotlyjs=False, full_html=False, config=plotly_config)
 
-        # BIC trajectory
+    # 2. BIC Evolution Plot
+    fig_bic = go.Figure()
+    for idx, name in enumerate(model_names):
+        m = model_dict[name]
         if m.BIC:
-            fig.add_trace(
+            fig_bic.add_trace(
                 go.Scatter(
-                    x=ev_iters,
+                    x=list(range(len(m.BIC))),
                     y=m.BIC,
                     mode="lines+markers",
-                    name=f"{name} (BIC)",
-                    line=dict(color=color, width=2.2, dash="dash"),
+                    name=name,
+                    line=dict(color=palette[idx % len(palette)], width=2.5, dash="dash"),
                     marker=dict(size=4),
                     hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: BIC = %{{y:.2f}}<extra></extra>",
-                ),
-                row=1,
-                col=2,
+                )
             )
+    fig_bic.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=50, r=20, t=20, b=40),
+        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+        yaxis=dict(title="BIC (Lower is Better)", gridcolor="#eaeef2"),
+        legend=dict(orientation="h", y=1.08, x=0.02),
+        hovermode="x unified",
+    )
+    div_bic = to_html(fig_bic, include_plotlyjs=False, full_html=False, config=plotly_config)
 
-    fig.update_xaxes(title_text="Iteration", row=1, col=1, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="Total Evidence (Log Likelihood)", row=1, col=1, gridcolor="#eaeef2")
-    fig.update_xaxes(title_text="Iteration", row=1, col=2, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="BIC (Bayesian Information Criterion)", row=1, col=2, gridcolor="#eaeef2")
-
-    # -------------------------------------------------------------------------
-    # 2. FINAL BAR PLOT & TABLE (Row 2)
-    # -------------------------------------------------------------------------
-    # Col 1: Final BIC & Evidence Bar Chart
-    fig.add_trace(
+    # 3. Final BIC Bar Chart
+    fig_bar = go.Figure()
+    fig_bar.add_trace(
         go.Bar(
             x=model_names,
             y=final_bic,
             name="Final BIC",
             marker=dict(color="#cf222e", opacity=0.85),
-            hovertemplate="<b>%{x}</b><br>Final BIC: %{y:.2f}<extra></extra>",
-        ),
-        row=2,
-        col=1,
+            hovertemplate="<b>%{x}</b><br>BIC: %{y:.2f}<extra></extra>",
+        )
     )
-
-    fig.add_trace(
-        go.Bar(
-            x=model_names,
-            y=final_evidence,
-            name="Final Evidence",
-            marker=dict(color="#0969da", opacity=0.85),
-            hovertemplate="<b>%{x}</b><br>Final Evidence: %{y:.2f}<extra></extra>",
-        ),
-        row=2,
-        col=1,
+    fig_bar.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=50, r=20, t=20, b=40),
+        xaxis=dict(title="Model", gridcolor="#eaeef2"),
+        yaxis=dict(title="Final BIC", gridcolor="#eaeef2"),
     )
+    div_bar = to_html(fig_bar, include_plotlyjs=False, full_html=False, config=plotly_config)
 
-    fig.update_xaxes(title_text="Model", row=2, col=1, gridcolor="#eaeef2")
-    fig.update_yaxes(title_text="Score", row=2, col=1, gridcolor="#eaeef2")
+    # Comparison Table HTML
+    comp_rows_html = ""
+    for idx in sorted_indices:
+        m_name = model_names[idx]
+        is_winner = ranks[idx] == 1
+        d_bic = delta_bic[idx]
+        d_bic_str = "0.0 (Best)" if is_winner else f"+{d_bic:.2f}"
+        badge_style = "background: #1a7f37; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 700;" if is_winner else "color: #59636e;"
 
-    # Col 2: Comparative Summary Table
-    table_header = ["Rank", "Model Name", "k (Params)", "Final Evidence", "Final BIC", "ΔBIC"]
-    table_rows = [
-        [f"#{ranks[i]}" for i in range(len(model_names))],
-        model_names,
-        [str(k) for k in n_params_list],
-        [f"{ev:.2f}" for ev in final_evidence],
-        [f"{bic:.2f}" for bic in final_bic],
-        [f"+{d:.2f}" if d > 0 else f"{d:.2f}" for d in delta_bic],
-    ]
+        comp_rows_html += f"""
+        <tr style="border-bottom: 1px solid #eaeef2; {'background: rgba(26, 127, 55, 0.04);' if is_winner else ''}">
+            <td style="padding: 10px 14px;"><span style="{badge_style}">#{ranks[idx]}</span></td>
+            <td style="padding: 10px 14px; font-weight: 700; font-family: monospace;">{m_name}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{n_params_list[idx]}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #0969da;">{final_evidence[idx]:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; font-weight: 700;">{final_bic[idx]:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: {'#1a7f37' if is_winner else '#cf222e'}; font-weight: 600;">{d_bic_str}</td>
+        </tr>
+        """
 
-    fig.add_trace(
-        go.Table(
-            header=dict(
-                values=[f"<b>{h}</b>" for h in table_header],
-                fill_color="#f6f8fa",
-                align="center",
-                font=dict(size=12, color="#1f2328"),
-                line_color="#d1d9e0",
-            ),
-            cells=dict(
-                values=table_rows,
-                fill_color="#ffffff",
-                align="center",
-                font=dict(size=11, color="#1f2328"),
-                line_color="#eaeef2",
-                height=26,
-            ),
-        ),
-        row=2,
-        col=2,
-    )
-
-    # -------------------------------------------------------------------------
-    # 3. PARAMETER COMPARISONS (Optional Rows 3.. )
-    # -------------------------------------------------------------------------
-    if include_params and compare_params:
-        for p_idx, p in enumerate(compare_params):
-            r = 3 + p_idx
-            # Compare population mean +/- SD and subject scatter across models that have parameter p
+    # Optional Parameter Comparisons HTML
+    param_cards_html = ""
+    if compare_params:
+        for p in compare_params:
             valid_models = [name for name in model_names if p in model_dict[name].params]
-            p_means = []
-            p_sds = []
+            p_means = [model_dict[name].hyper_params[p]["mean"] for name in valid_models]
+            p_sds = [model_dict[name].hyper_params[p]["sd"] for name in valid_models]
 
-            for name in valid_models:
-                m = model_dict[name]
-                p_means.append(m.hyper_params[p]["mean"])
-                p_sds.append(m.hyper_params[p]["sd"])
-
-            # Error bar of population mean +/- 1 SD
-            fig.add_trace(
+            fig_param = go.Figure()
+            fig_param.add_trace(
                 go.Scatter(
                     x=valid_models,
                     y=p_means,
                     error_y=dict(type="data", array=p_sds, visible=True),
                     mode="markers+text",
                     text=[f"{m:.3f}" for m in p_means],
-                    textposition="top right",
+                    textposition="top center",
                     marker=dict(size=10, color="#8250df"),
-                    name=f"{p} (Mean ± 1 SD)",
-                    hovertemplate=f"<b>%{{x}}</b><br>{p} Population Mean: %{{y:.3f}}<extra></extra>",
-                ),
-                row=r,
-                col=1,
+                    name="Mean ± 1 SD",
+                    hovertemplate="<b>%{x}</b><br>Mean: %{y:.3f}<extra></extra>",
+                )
             )
+            fig_param.update_layout(
+                template="plotly_white",
+                height=240,
+                margin=dict(l=45, r=15, t=20, b=40),
+                xaxis=dict(title="Model", gridcolor="#eaeef2"),
+                yaxis=dict(title=f"{p} Value", gridcolor="#eaeef2"),
+            )
+            div_param = to_html(fig_param, include_plotlyjs=False, full_html=False, config=plotly_config)
+            param_cards_html += f"""
+            <div style="background: #ffffff; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px;">
+                <div style="font-weight: 700; font-family: monospace; margin-bottom: 4px; font-size: 13px;">Parameter: {p}</div>
+                {div_param}
+            </div>
+            """
 
-            # Scatter of subject means across models
-            for idx_m, name in enumerate(valid_models):
-                m = model_dict[name]
-                if m.mean_params and p in m.mean_params:
-                    s_vals = m.mean_params[p]
-                    fig.add_trace(
-                        go.Scatter(
-                            x=[name] * len(s_vals),
-                            y=s_vals,
-                            mode="markers",
-                            marker=dict(
-                                size=6,
-                                color=palette[idx_m % len(palette)],
-                                opacity=0.7,
-                            ),
-                            showlegend=False,
-                            name=f"{name} subjects",
-                            hovertemplate=f"<b>{name}</b><br>Subject {p} Mean: %{{y:.3f}}<extra></extra>",
-                        ),
-                        row=r,
-                        col=1,
-                    )
+    comp_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Comparison Report</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f6f8fa;
+            color: #1f2328;
+            padding: 24px;
+            line-height: 1.5;
+        }}
+        .container {{
+            max-width: 1140px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }}
+        .card {{
+            background: #ffffff;
+            border: 1px solid #d1d9e0;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(31,35,40,0.04);
+        }}
+        .card-header {{
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #eaeef2;
+        }}
+        .card-title {{
+            font-size: 15px;
+            font-weight: 700;
+            color: #1f2328;
+        }}
+        .card-subtitle {{
+            font-size: 12px;
+            color: #59636e;
+            margin-top: 2px;
+        }}
+        .grid-2 {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }}
+        @media (max-width: 768px) {{
+            .grid-2 {{ grid-template-columns: 1fr; }}
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 12px;
+        }}
+        th {{
+            background-color: #f6f8fa;
+            color: #59636e;
+            font-weight: 600;
+            padding: 10px 14px;
+            border-bottom: 1px solid #d1d9e0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+            <div>
+                <span style="background: rgba(130, 80, 223, 0.1); color: #8250df; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid rgba(130, 80, 223, 0.2);">
+                    Multi-Model Comparison
+                </span>
+                <h1 style="font-size: 22px; font-weight: 800; color: #1f2328; margin-top: 6px;">Comparative Model Selection</h1>
+                <p style="font-size: 13px; color: #59636e;">Comparing {len(model_names)} models: {", ".join(model_names)}</p>
+            </div>
+            <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: right;">
+                <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Best Model (Lowest BIC)</div>
+                <div style="font-size: 16px; font-weight: 700; color: #1a7f37; font-family: monospace;">
+                    {model_names[sorted_indices[0]]} (BIC: {final_bic[sorted_indices[0]]:.1f})
+                </div>
+            </div>
+        </div>
 
-            fig.update_xaxes(title_text="Model", row=r, col=1, gridcolor="#eaeef2")
-            fig.update_yaxes(title_text=f"{p} Value", row=r, col=1, gridcolor="#eaeef2")
+        <!-- Evolution Curves -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Total Evidence Evolution Across Iterations</div>
+                    <div class="card-subtitle">Log marginal likelihood (higher is better)</div>
+                </div>
+                {div_ev}
+            </div>
 
-    # Overall Layout & Height
-    total_height = 700 + param_rows * 280
-    fig.update_layout(
-        title=dict(
-            text=f"<b>importance_sampling Comparative Model Report</b><br>"
-            f"<sup>Comparing {len(model_names)} Models ({', '.join(model_names)}) | "
-            f"Best Model by BIC: <b>{model_names[sorted_indices[0]]}</b></sup>",
-            x=0.03,
-            y=0.985,
-            xanchor="left",
-            yanchor="top",
-            font=dict(size=18, color="#1f2328", family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"),
-        ),
-        height=total_height,
-        template="plotly_white",
-        barmode="group",
-        hovermode="closest",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=0.98,
-            font=dict(size=10.5),
-        ),
-        margin=dict(l=60, r=40, t=110, b=60),
-    )
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">BIC Evolution Across Iterations</div>
+                    <div class="card-subtitle">Bayesian Information Criterion (lower is better)</div>
+                </div>
+                {div_bic}
+            </div>
+        </div>
+
+        <!-- Final Comparison: Bar Plot & Table -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Final BIC Comparison Bar Chart</div>
+                    <div class="card-subtitle">Comparing model complexity and goodness-of-fit</div>
+                </div>
+                {div_bar}
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Final Model Ranking &amp; Statistics</div>
+                    <div class="card-subtitle">Ranked by BIC; ΔBIC &gt; 10 indicates decisive evidence</div>
+                </div>
+                <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Model</th>
+                                <th>k</th>
+                                <th>Evidence</th>
+                                <th>BIC</th>
+                                <th>ΔBIC</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {comp_rows_html}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {f'''
+        <!-- Parameter Comparisons -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Parameter Comparison Across Models</div>
+                <div class="card-subtitle">Population mean ± 1 SD for shared parameters</div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
+                {param_cards_html}
+            </div>
+        </div>
+        ''' if compare_params else ''}
+    </div>
+</body>
+</html>
+"""
+
+    dashboard = ReportDashboard(comp_html, figure=fig_ev)
 
     if filename:
-        fig.write_html(filename, include_plotlyjs="cdn", full_html=True)
+        dashboard.save(filename)
 
     if show:
-        if renderer:
-            fig.show(renderer=renderer)
-        else:
-            fig.show()
+        try:
+            from IPython.display import HTML, display
+            display(HTML(comp_html))
+        except (ImportError, Exception):
+            dashboard.show()
 
-    return fig
+    return dashboard
 
 
 def compare_parameters(
@@ -769,26 +1071,8 @@ def compare_parameters(
     filename: Optional[str] = None,
     show: bool = True,
     renderer: Optional[str] = None,
-) -> Any:
-    """Generate a dedicated parameter comparison report across multiple models.
-
-    Useful when you want to inspect parameter estimates across models without
-    overcrowding the main model fit report.
-
-    Parameters
-    ----------
-    samplers : Union[Sequence[Sampler], Dict[str, Sampler]]
-        Two or more fitted Sampler instances.
-    params : Optional[Sequence[str]], default=None
-        List of parameter keys to compare. If None, automatically selects all
-        parameters shared by at least two models.
-    filename : Optional[str], default=None
-        If provided, exports a self-contained HTML file.
-    show : bool, default=True
-        Whether to display the interactive figure in the current environment.
-    renderer : Optional[str], default=None
-        Plotly renderer option.
-    """
+) -> ReportDashboard:
+    """Generate a dedicated parameter comparison report across multiple models."""
     if isinstance(samplers, dict):
         model_dict = samplers
     else:
@@ -797,7 +1081,6 @@ def compare_parameters(
             for i, s in enumerate(samplers)
         }
 
-    # Discover shared parameters if not provided
     if params is None:
         param_counts: Dict[str, int] = {}
         for s in model_dict.values():
@@ -805,7 +1088,6 @@ def compare_parameters(
                 param_counts[p] = param_counts.get(p, 0) + 1
         params = [p for p, count in param_counts.items() if count >= 2]
         if not params:
-            # Fallback to all parameters
             params = list(param_counts.keys())
 
     return compare_models(
@@ -815,4 +1097,3 @@ def compare_parameters(
         compare_params=params,
         renderer=renderer,
     )
-
