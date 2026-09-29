@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy.special import logsumexp
+from tqdm.auto import tqdm
 
 from importance_sampling.utils import (
     save_model as _save_model_func,
@@ -262,13 +263,27 @@ class Sampler:
 
         return resample, log_mean_likelihood, mean_params
 
-    def adjust_hyper_priors(self, n_samples: int = 1000, disable_progress: bool = True) -> None:
+    def adjust_hyper_priors(
+        self,
+        n_samples: int = 1000,
+        disable_progress: bool = False,
+        leave: bool = False,
+    ) -> None:
         """Run one iteration of importance sampling across all subjects and update priors."""
         subject_samples: Dict[str, List[np.ndarray]] = {param: [] for param in self.params}
         mean_params: Dict[str, List[float]] = {param: [] for param in self.params}
         log_likelihoods: List[float] = []
 
-        for s in range(self.n_subjects):
+        subj_iter = range(self.n_subjects)
+        if not disable_progress:
+            subj_iter = tqdm(
+                subj_iter,
+                desc="  Subjects",
+                unit="subj",
+                leave=leave,
+            )
+
+        for s in subj_iter:
             resample, log_mean_ll, s_mean = self.sample_resample(s, n_samples=n_samples)
             for param in self.params:
                 subject_samples[param].append(resample[param])
@@ -348,25 +363,75 @@ class Sampler:
         n_mean: int = 10,
         stop_at_convergence: bool = True,
         verbose: bool = True,
+        progress_bar: bool = True,
     ) -> "Sampler":
-        """Run the iterative importance sampling estimation loop until convergence."""
+        """Run the iterative importance sampling estimation loop until convergence.
+
+        Parameters
+        ----------
+        n_iterations : int, default=10
+            Maximum number of iterations.
+        n_samples : int, default=1000
+            Number of particles/draws sampled per subject on each iteration.
+        epsilon : float, default=0.01
+            Convergence threshold: stops when evidence change over n_mean iterations < epsilon.
+        n_mean : int, default=10
+            Window size for moving average convergence check.
+        stop_at_convergence : bool, default=True
+            Whether to stop early when convergence criterion is met.
+        verbose : bool, default=True
+            Whether to print detailed diagnostics and elapsed/predicted duration.
+        progress_bar : bool, default=True
+            Whether to display tqdm progress bars across iterations and within iterations (for subjects).
+        """
         start = time.time()
 
-        for i in range(n_iterations):
-            self.adjust_hyper_priors(n_samples=n_samples, disable_progress=True)
+        iter_range = range(n_iterations)
+        iter_pbar = (
+            tqdm(iter_range, desc=f"Fitting {self.model_name}", unit="iter", leave=True)
+            if progress_bar
+            else iter_range
+        )
+
+        for i in iter_pbar:
+            # Within-iteration progress across subjects
+            self.adjust_hyper_priors(
+                n_samples=n_samples,
+                disable_progress=not progress_bar,
+                leave=False,
+            )
             self.iterations += 1
 
+            # Update tqdm postfix with current diagnostics
+            if progress_bar and hasattr(iter_pbar, "set_postfix"):
+                postfix_data = {
+                    "Evidence": f"{self.evidence[-1]:.2f}",
+                    "BIC": f"{self.BIC[-1]:.2f}",
+                }
+                if len(self.evidence_change) > 0:
+                    postfix_data["ΔEv"] = f"{self.evidence_change[-1]:+.2f}"
+                iter_pbar.set_postfix(postfix_data)
+
             # Convergence check over window of n_mean iterations
+            change = 0.0
+            converged = False
             if i >= n_mean:
                 change = (self.evidence[-1] - self.evidence[-n_mean]) / n_mean
                 if change < epsilon and stop_at_convergence:
-                    if verbose:
-                        print(
-                            f"\n✨ Converged after {i + 1} iterations.\n"
-                            f"Total evidence: {round(self.evidence[-1], 4)}"
-                        )
-                    self.total_fit_time += time.time() - start
-                    break
+                    converged = True
+
+            if converged:
+                if verbose:
+                    msg = (
+                        f"\n✨ Converged after {i + 1} iterations.\n"
+                        f"Total evidence: {round(self.evidence[-1], 4)}"
+                    )
+                    if progress_bar:
+                        tqdm.write(msg)
+                    else:
+                        print(msg)
+                self.total_fit_time += time.time() - start
+                break
 
             elapsed = time.time() - start
             predicted_duration = (elapsed / (i + 1)) * (n_iterations - i - 1)
@@ -382,13 +447,20 @@ class Sampler:
                     f"(change: {round(self.evidence_change[-1], 4):>7}"
                     f"{change_n_mean})\n"
                 )
-                print(prefix + desc)
+                if progress_bar:
+                    tqdm.write(prefix + desc)
+                else:
+                    print(prefix + desc)
         else:
             if verbose:
-                print(
+                msg = (
                     f"\nCompleted all {n_iterations} iterations without convergence.\n"
                     f"Final evidence: {round(self.evidence[-1], 4)}"
                 )
+                if progress_bar:
+                    tqdm.write(msg)
+                else:
+                    print(msg)
             self.total_fit_time += time.time() - start
 
         return self

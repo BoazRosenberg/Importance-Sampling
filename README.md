@@ -9,7 +9,7 @@ A lightweight, general-purpose Python package for fitting computational and cogn
 Install the package directly from GitHub using `pip`:
 
 ```bash
-pip install git+https://github.com/BoazRsnbrg/importance_sampling.git
+pip install git+https://github.com/BoazRosenberg/Importance-Sampling.git
 ```
 
 For interactive Plotly report generation (`sampler.create_report`), ensure `plotly` is installed:
@@ -213,6 +213,7 @@ sampler.iterative_model_fit(
     n_mean: int = 10,
     stop_at_convergence: bool = True,
     verbose: bool = True,
+    progress_bar: bool = True,
 ) -> "Sampler"
 ```
 
@@ -233,6 +234,8 @@ Runs the iterative importance sampling estimation loop until maximum iterations 
   Whether to terminate early when the convergence threshold is reached.
 * **`verbose`** (`bool`, default=`True`):
   If `True`, prints iteration progress, elapsed time, predicted time remaining, total evidence, and convergence notices.
+* **`progress_bar`** (`bool`, default=`True`):
+  If `True`, displays `tqdm` progress bars across iterations and within iterations (for subjects), updating live with Evidence, BIC, and &Delta;Evidence.
 
 ---
 
@@ -305,23 +308,54 @@ Generates an interactive diagnostic report widget powered by Plotly. Also availa
 * **`renderer`** (`Optional[str]`, default=`None`):
   Plotly renderer option (e.g., `'browser'`, `'notebook'`, `'colab'`).
 
-#### Report Visualizations Included
+#### Report Layout & Visualizations Included
 
-1. **Hyperparameter Evolution**:
-   * Evaluated separately for each parameter across iterations $0, 1, \dots, N$. Designed to scale cleanly even when fitting 10+ parameters.
-   * **Solid line** represents the population mean trajectory.
+1. **Model Fit & Convergence**:
+   * **Total Evidence (Log Likelihood) & BIC**: Dual-axis trajectory showing total model evidence climbing and BIC minimizing across iterations.
+   * **Subject-Level Evidence Spaghetti Plot**: Trajectories of log marginal likelihood for each individual subject, alongside the population mean.
+2. **Model Parameters Table**:
+   * Compact table listing all model parameters by their raw dictionary keys (e.g. `alpha`, `beta`, `decay`, etc.), with final fitted means, standard deviations, and ±1 SD credible bounds.
+3. **Hyperparameter Evolution Grid (3 Plots per Row)**:
+   * Arranged in a responsive 3-column grid, adding a separate subplot for each selected parameter.
+   * **Solid line** represents the population mean trajectory across iterations $0, 1, \dots, N$.
    * **Translucent shaded band** represents $\pm 1 \text{ SD}$ around the mean.
    * Hover tooltips display the exact iteration, mean, $+1 \text{ SD}$, and $-1 \text{ SD}$.
-   * Uses raw dictionary keys directly (no human naming or descriptive labels required).
-2. **Model Fit & Convergence**:
-   * **Total Evidence (Log Likelihood)**: Trajectory of total log marginal likelihood summed across all subjects.
-   * **BIC Curve**: Bayesian Information Criterion trajectory across iterations.
-   * **Subject-Level Evidence Trajectories**: Spaghetti plot showing convergence trajectories for individual subjects, alongside the population mean.
-3. **Individual Subject Posterior Means (Graphical, No Raw Numbers)**:
-   * **Histogram Mode (Single Parameter)**: Shows the distribution histogram of subject posterior means across the cohort for any selected parameter.
-   * **2D Scatter Plot Mode (Parameter Pairs)**: Plots individual subject dots in 2D parameter space (e.g. $P_1$ vs $P_2$), showing how subjects distribute without displaying raw numeric tables.
-4. **Multinormal Correlation / Covariance Matrix**:
-   * **Interactive Heatmap**: Displays the correlation / covariance matrix between all parameters in latent space (with values and diverging color gradient), ideal when using `multinormal="full"` or paired correlations.
+   * Scalable to models with 10+ parameters without vertical clutter.
+4. **Individual Subject Posterior Means (Scatter Plot per Parameter)**:
+   * Arranged in a separate plot for each selected parameter.
+   * **Y-axis**: Subject index / number ($0, 1, \dots, N_{\text{subjects}} - 1$).
+   * **X-axis**: The subject's posterior mean value for that parameter.
+   * Each dot represents an individual subject, enabling immediate inspection of between-subject spread without displaying raw numbers.
+5. **Multinormal Correlation / Covariance Matrix Heatmap**:
+   * Located at the end of the report: an interactive correlation heatmap showing latent space parameter correlations ($r \in [-1.0, 1.0]$) with a diverging color scale, cell annotations, and hover values. Useful when fitting models with `multinormal="full"` or paired correlations.
+
+---
+
+### Multi-Model Comparison: `compare_models`
+
+```python
+from importance_sampling import compare_models
+
+compare_models(
+    samplers: Union[Sequence[Sampler], Dict[str, Sampler]],
+    filename: Optional[str] = None,
+    show: bool = True,
+    compare_params: Optional[Sequence[str]] = None,
+    renderer: Optional[str] = None,
+) -> Any
+```
+
+Generates an interactive comparative report widget to evaluate two or more fitted models against each other.
+
+#### Features Included:
+1. **Evidence & BIC Evolution**:
+   * Dual subplots showing total evidence (log likelihood) and BIC curves across iterations for all models simultaneously.
+2. **Final Fit Comparison Bar Plot & Table**:
+   * Side-by-side grouped bar plot of final evidence and BIC.
+   * Comprehensive model ranking table with $k$ (parameters), Final Evidence, Final BIC, and $\Delta\text{BIC}$ relative to the winning model.
+3. **Parameter Comparison Across Models**:
+   * Pass `compare_params=["lr", "inv_temp"]` to inspect shared parameter estimates (population mean $\pm 1 \text{ SD}$ error bars and subject distributions) across the models.
+   * Can also be called directly via `compare_parameters([m1, m2], params=["lr"])` to keep the primary report focused.
 
 ---
 

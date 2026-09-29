@@ -43,3 +43,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.urls]
+Homepage = "https://github.com/BoazRosenberg/Importance-Sampling"
+Repository = "https://github.com/BoazRosenberg/Importance-Sampling"
