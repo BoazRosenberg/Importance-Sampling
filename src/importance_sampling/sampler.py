@@ -487,6 +487,50 @@ class Sampler:
             sd = round(self.hyper_params[p]["sd"], 4)
             print(f"  • {p:>12s}: mean = {mu:8.4f}, sd = {sd:8.4f}")
 
+    def create_report(
+        self,
+        filename: Optional[str] = None,
+        show: bool = True,
+        transformed: bool = True,
+        renderer: Optional[str] = None,
+    ) -> Any:
+        """Generate an interactive report widget for model diagnostics and results.
+
+        Visualizes:
+        1. Hyperparameter evolution across iterations (solid line for mean, shaded area for +/- 1 SD).
+        2. Model fit and evidence convergence (total evidence and BIC).
+        3. Individual subject posterior means and parameter distribution.
+
+        Parameters
+        ----------
+        filename : Optional[str], default=None
+            If provided (e.g. 'model_report.html'), exports a self-contained, interactive
+            HTML report that can be opened in any web browser without a Python runtime.
+        show : bool, default=True
+            Whether to display the interactive figure in the current environment
+            (e.g., Jupyter notebook, Google Colab, or browser).
+        transformed : bool, default=True
+            If True, displays hyperparameters transformed into their valid domain bounds
+            (e.g., [0, 1] for learning rate, strictly positive for inverse temperature).
+            If False, displays parameters in latent normal space.
+        renderer : Optional[str], default=None
+            Plotly renderer to use when displaying the figure (e.g., 'browser', 'notebook', 'colab').
+
+        Returns
+        -------
+        plotly.graph_objects.Figure
+            The interactive Plotly Figure object containing the multi-panel report.
+        """
+        from importance_sampling.report import create_report as _create_report_func
+
+        return _create_report_func(
+            self,
+            filename=filename,
+            show=show,
+            transformed=transformed,
+            renderer=renderer,
+        )
+
 
 # -----------------------------------------------------------------------------
 # Module Function: Load Model

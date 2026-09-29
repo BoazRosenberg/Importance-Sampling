@@ -5,6 +5,7 @@ using Iterative Importance Sampling (IIS).
 """
 
 from importance_sampling.sampler import Sampler, load_model
+from importance_sampling.report import create_report
 from importance_sampling.utils import (
     logsumexp,
     sigmoid,
@@ -20,6 +21,7 @@ __all__ = [
     "Sampler",
     "load_model",
     "save_model",
+    "create_report",
     "logsumexp",
     "sigmoid",
     "logit",

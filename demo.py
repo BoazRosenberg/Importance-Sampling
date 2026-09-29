@@ -186,6 +186,18 @@ def main():
     loaded_sampler = load_model("demo_model", directory="saved_models")
     print(f"• load_model(): successfully loaded '{loaded_sampler.model_name}' (evidence: {loaded_sampler.evidence[-1]:.4f})")
 
+    # D. Interactive Report Widget (Plotly)
+    # Creates an interactive dashboard with:
+    # - Hyperparameter evolution (mean line with shaded +/- 1 SD band per parameter)
+    # - Model fit & convergence (total evidence and BIC)
+    # - Individual subject posterior means and distributions
+    try:
+        report_file = "qlearning_report.html"
+        sampler.create_report(filename=report_file, show=False)
+        print(f"• create_report(): generated interactive report at '{report_file}'")
+    except Exception as e:
+        print(f"• create_report(): {e}")
+
     print("\nDemo finished successfully!")
     print("=" * 65)
 

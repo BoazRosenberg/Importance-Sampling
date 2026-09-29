@@ -1,26 +1,32 @@
 # importance_sampling
 
-A lightweight Python package for fitting computational and cognitive models to multi-subject data using **Iterative Importance Sampling (IIS)**.
+A lightweight, general-purpose Python package for fitting computational and cognitive models to multi-subject data using **Iterative Importance Sampling (IIS)**.
 
 ---
 
 ## Installation
 
-Install the package directly from GitHub:
+Install the package directly from GitHub using `pip`:
 
 ```bash
 pip install git+https://github.com/BoazRsnbrg/importance_sampling.git
+```
+
+For interactive Plotly report generation (`sampler.create_report`), ensure `plotly` is installed:
+
+```bash
+pip install plotly
 ```
 
 ---
 
 ## How to Use the Package
 
-To fit a model, you provide three core inputs:
+To fit a computational model, you provide three core inputs:
 
-1. **Data (`data`)**: A list containing the dataset for each subject (`[subj_1_data, subj_2_data, ...]`).
-2. **Model (`model`)**: A Python function that evaluates trial choices and outcomes for a single subject.
-3. **Parameters and Priors (`hyper_params`)**: A dictionary defining the parameters to estimate, their initial population mean and standard deviation in latent space, and their transformation functions into valid bounds.
+1. **Input Data (`data`)**: A list containing the dataset for each subject (`[subj_1_data, subj_2_data, subj_3_data, ...]`). Each subject's data can be a dictionary, DataFrame, or array containing trial-by-trial choices and observed outcomes.
+2. **A Model (`model`)**: A Python function that takes a single subject's data and a sample of candidate parameter draws, and evaluates trial outcomes in a single vectorized loop.
+3. **Parameters and Priors (`hyper_params`)**: A dictionary defining each parameter to estimate, its initial population mean and standard deviation in latent space, and its transformation function into valid parameter bounds.
 
 ---
 
@@ -31,7 +37,7 @@ The following example demonstrates fitting a full-information two-armed bandit m
 ```python
 import numpy as np
 from scipy.special import expit
-from importance_sampling import Sampler, sigmoid, softplus
+from importance_sampling import Sampler, sigmoid, softplus, load_model
 
 # -----------------------------------------------------------------------------
 # 1. Data: List of datasets for each subject
@@ -72,7 +78,7 @@ def q_learning_model(subj_data, parameters, mode="log_likelihood"):
         else:
             log_likelihood += np.log(1.0 - p_choose_1)
 
-        # Update Q values using full outcome information
+        # Update Q1 and Q2
         Q1 += alpha * (reward1[i] - Q1)
         Q2 += alpha * (reward2[i] - Q2)
 
@@ -82,7 +88,7 @@ def q_learning_model(subj_data, parameters, mode="log_likelihood"):
 
 
 # -----------------------------------------------------------------------------
-# 3. Parameters and Priors
+# 3. Parameters, Priors, and Transformations
 # -----------------------------------------------------------------------------
 hyper_priors = {
     "lr":       {"mean": 0.0, "sd": 1.0, "transform": sigmoid},   # Sigmoid -> [0, 1]
@@ -91,79 +97,243 @@ hyper_priors = {
 
 
 # -----------------------------------------------------------------------------
-# 4. Fit the Model
+# 4. Initialize & Fit Sampler
 # -----------------------------------------------------------------------------
 sampler = Sampler(
     data=data,
     model=q_learning_model,
     hyper_params=hyper_priors,
-    n_choices=2,  # Number of choice options (important for BIC calculation)
+    n_choices=2,               # Choice alternatives per decision (important for BIC scaling)
     model_name="FullInfoQLearning",
 )
 
 sampler.iterative_model_fit(n_iterations=12, n_samples=1000)
+
+# Print terminal summary table
+sampler.summary()
+
+# Generate an interactive Plotly report widget
+sampler.create_report(filename="qlearning_report.html")
 ```
 
 ---
 
-## Model Function Requirements
+## The Model Function: Arguments, Shapes & Modes
 
-The model function takes three arguments:
+Your model function receives three arguments:
 
 ```python
 def my_model(subj_data, parameters, mode="log_likelihood"):
 ```
 
-1. **`subj_data`**: The dataset for a single subject (such as a dictionary, DataFrame, or array) containing choices and trial outcomes.
-2. **`parameters`**: A dictionary where each parameter is a **1D NumPy array of $N$ samples** (shape `(n_samples,)`). The parameters are automatically transformed into their valid domain bounds before being passed to your model.
-3. **`mode`**: A string indicating what the function should calculate:
-   - **`"log_likelihood"`**: Returns a 1D NumPy array of total log-likelihoods for each parameter sample (length $N$).
-   - **`"simulate"`**: Returns the choice probabilities for each trial. When calling `sampler.simulate()`, these are averaged across the parameter samples to yield the mean choice probabilities for each trial.
+### Arguments
+
+| Argument | Type | Description |
+| :--- | :--- | :--- |
+| `subj_data` | `Any` (e.g. `dict`, `DataFrame`) | The dataset for a **single subject** containing observed trial choices and outcomes. |
+| `parameters` | `Dict[str, np.ndarray]` | Dictionary mapping parameter names to candidate values. Each parameter is a **1D NumPy array of shape `(n_samples,)`** (e.g., 1,000 draws). Parameters are **automatically transformed** into their valid domain bounds by the `Sampler` *before* entering your model. |
+| `mode` | `str` | Either `"log_likelihood"` or `"simulate"`. |
+
+### Behavior by `mode`
+
+* **`mode == "log_likelihood"`**:
+  Evaluates the accumulated log-likelihood across all trials for each candidate parameter set.
+  * **Return Value**: A **1D NumPy array of shape `(n_samples,)`**, where index $j$ is the total log-likelihood for particle $j$.
+
+* **`mode == "simulate"`**:
+  Evaluates choice probabilities across trials for generating simulated behavior.
+  * **Return Value**: An array of choice probabilities `p_choices` for each trial. When calling `sampler.simulate()`, these are averaged across parameter samples to return the dataset with trial-by-trial mean choice probabilities.
 
 ---
 
-## Outputs: Fitting Results
+## API Reference & Detailed Specifications
 
-All fitting results and posterior estimates are stored directly on the `Sampler` instance:
-
-### 1. General & Subject Evidence
-- **`sampler.evidence`**: A list of the total model evidence (log marginal likelihood summed across all subjects) at each iteration.
-- **`sampler.subj_evidence`**: A 2D list of shape `(n_iterations, n_subjects)` containing the log marginal likelihood for each subject across iterations.
-
-### 2. Population Hyperparameters
-- **`sampler.hyper_params`**: A dictionary containing the final fitted population mean and standard deviation for each parameter:
-  ```python
-  print(sampler.hyper_params)
-  # {'lr': {'mean': -0.412, 'sd': 0.285}, 'inv_temp': {'mean': 1.152, 'sd': 0.241}}
-  ```
-- **`sampler.hyper_params_list`**: The history of population parameters at each iteration from $0$ to $N$.
-- **`sampler.cor_matrix`**: The estimated correlation matrix between parameters in latent normal space.
-
-### 3. Subject-Level Estimates
-- **`sampler.mean_params`**: A dictionary mapping each parameter to a list of weighted posterior means for each subject:
-  ```python
-  subj_0_lr = sampler.mean_params["lr"][0]
-  ```
-- **`sampler.samples`**: A dictionary mapping each parameter to full arrays of resampled posterior candidate draws for each subject.
-
-### 4. Metrics & Summary
-- **`sampler.BIC`**: Bayesian Information Criterion at each iteration (uses `n_choices` to scale degrees of freedom; lower is better).
-- **`sampler.iterations`** & **`sampler.total_fit_time`**: Total completed iterations and execution runtime in seconds.
-- **`sampler.summary()`**: Prints a formatted summary table of the final fit metrics and population hyper-parameters.
-
----
-
-## Additional Utilities
-
-### 1. Saving and Loading Models
-
-Fitted models can be saved to disk and reloaded in another script or session:
+### `Sampler` Class
 
 ```python
-# Save the fitted model
+Sampler(
+    data: Sequence[Any],
+    model: Callable,
+    hyper_params: Dict[str, Dict[str, Any]],
+    transformations: Optional[Dict[str, Callable]] = None,
+    multinormal: Union[bool, str, List[Tuple[str, str]]] = False,
+    n_choices: int = 2,
+    model_name: str = "unnamed_model",
+    description: str = "",
+    type: str = "B",
+    random_state: Optional[Union[int, np.random.Generator]] = None,
+)
+```
+
+#### Initialization Parameters
+
+* **`data`** (`Sequence[Any]`):
+  List or sequence where `data[s]` contains the empirical dataset for subject $s$.
+* **`model`** (`Callable`):
+  Model function with signature `model(subj_data, parameters, mode="log_likelihood")`.
+* **`hyper_params`** (`Dict[str, Dict[str, Any]]`):
+  Initial population hyper-priors in latent standard normal space. Format:
+  ```python
+  {
+      "param_name": {
+          "mean": float,       # Latent population mean
+          "sd": float,         # Latent population standard deviation
+          "transform": func,   # Optional link function (e.g. sigmoid, softplus)
+      }
+  }
+  ```
+* **`transformations`** (`Optional[Dict[str, Callable]]`, default=`None`):
+  Optional dictionary mapping parameter names to functions that transform latent normal values into valid bounded ranges (e.g., `sigmoid` for $[0, 1]$, `softplus` for $(0, \infty)$). If specified under the `"transform"` key of `hyper_params`, this argument can be omitted.
+* **`multinormal`** (`Union[bool, str, List[Tuple[str, str]]]`, default=`False`):
+  Structure of the parameter covariance matrix in latent space:
+  * `False`: Independent parameters (identity correlation matrix).
+  * `"full"`: Estimates the full $P \times P$ correlation matrix between all parameters.
+  * `List[Tuple[str, str]]`: Estimates correlation only between specified pairs (e.g., `[("lr", "inv_temp")]`).
+* **`n_choices`** (`int`, default=`2`):
+  Number of discrete choice options available per decision (e.g., 2 for a two-armed bandit). Used to scale degrees of freedom for BIC calculations:
+  $$\text{sample\_size} = \max(1, N_{\text{subjects}} \times \text{n\_choices})$$
+* **`model_name`** (`str`, default=`"unnamed_model"`):
+  Descriptive name for the model used in summaries, reports, and file saving.
+* **`description`** (`str`, default=`""`):
+  Optional notes or descriptive documentation for the model.
+* **`type`** (`str`, default=`"B"`):
+  Model category code (e.g. `"B"` for Behavioral).
+* **`random_state`** (`Optional[Union[int, np.random.Generator]]`, default=`None`):
+  Seed integer or NumPy Generator for reproducible sampling.
+
+---
+
+### Fitting Method: `sampler.iterative_model_fit`
+
+```python
+sampler.iterative_model_fit(
+    n_iterations: int = 10,
+    n_samples: int = 1000,
+    epsilon: float = 0.01,
+    n_mean: int = 10,
+    stop_at_convergence: bool = True,
+    verbose: bool = True,
+) -> "Sampler"
+```
+
+Runs the iterative importance sampling estimation loop until maximum iterations or evidence stabilization.
+
+#### Parameters
+
+* **`n_iterations`** (`int`, default=`10`):
+  Maximum number of importance sampling iterations.
+* **`n_samples`** (`int`, default=`1000`):
+  Number of candidate parameter draws (particles) sampled per subject on each iteration.
+* **`epsilon`** (`float`, default=`0.01`):
+  Convergence threshold. Iteration stops when the average change in total evidence over the last `n_mean` iterations falls below `epsilon`:
+  $$\frac{\text{evidence}_t - \text{evidence}_{t - n_{\text{mean}}}}{n_{\text{mean}}} < \epsilon$$
+* **`n_mean`** (`int`, default=`10`):
+  Window size in iterations used for the moving convergence check.
+* **`stop_at_convergence`** (`bool`, default=`True`):
+  Whether to terminate early when the convergence threshold is reached.
+* **`verbose`** (`bool`, default=`True`):
+  If `True`, prints iteration progress, elapsed time, predicted time remaining, total evidence, and convergence notices.
+
+---
+
+### Simulation Method: `sampler.simulate`
+
+```python
+sampler.simulate(
+    mode: str = "resample",
+    subjects: Union[str, Sequence[int]] = "all",
+    override_params: Optional[Dict[str, Any]] = None,
+    n_samples: int = 1000,
+) -> List[Any]
+```
+
+Runs the model in simulate mode using the fitted parameters.
+
+#### Parameters
+
+* **`mode`** (`str`, default=`"resample"`):
+  Source of parameter draws:
+  * `"resample"`: Uses each subject's resampled posterior candidate draws (`sampler.samples`).
+  * `"hyper_params"`: Draws $N$ candidate parameters from the fitted population normal distribution.
+  * `"override_params"`: Uses an explicitly provided parameter dictionary.
+* **`subjects`** (`Union[str, Sequence[int]]`, default=`"all"`):
+  Either `"all"` or a list of integer subject indices to simulate.
+* **`override_params`** (`Optional[Dict[str, Any]]`, default=`None`):
+  Custom parameter dictionary to test specific counterfactuals.
+* **`n_samples`** (`int`, default=`1000`):
+  Number of parameter draws used when `mode="hyper_params"`.
+
+#### Return Value
+
+A list containing each subject's data as it was originally structured, with an added **`mean_choice_probability`** array (1D NumPy array across trials, averaged across parameter samples):
+
+```python
+sim_data = sampler.simulate()
+
+# Access mean choice probability for Subject 0:
+print(sim_data[0]["mean_choice_probability"])
+
+# Original data keys remain preserved:
+print(sim_data[0]["choice"])
+print(sim_data[0]["trial"])
+```
+
+---
+
+### Interactive Plotly Report: `sampler.create_report`
+
+```python
+sampler.create_report(
+    filename: Optional[str] = None,
+    show: bool = True,
+    transformed: bool = True,
+    renderer: Optional[str] = None,
+) -> Any
+```
+
+Generates an interactive diagnostic report widget powered by Plotly. Also available as a standalone function `create_report(sampler, ...)`.
+
+#### Parameters
+
+* **`filename`** (`Optional[str]`, default=`None`):
+  If provided (e.g., `"model_report.html"`), exports a standalone, self-contained interactive HTML file that can be opened in any web browser without needing a Python runtime.
+* **`show`** (`bool`, default=`True`):
+  Whether to render the interactive widget in the current environment (Jupyter notebook, Google Colab, or browser).
+* **`transformed`** (`bool`, default=`True`):
+  * `True`: Displays hyperparameters in their valid domain space (e.g. learning rate in $[0, 1]$, inverse temperature $> 0$).
+  * `False`: Displays hyperparameters in latent normal space.
+* **`renderer`** (`Optional[str]`, default=`None`):
+  Plotly renderer option (e.g., `'browser'`, `'notebook'`, `'colab'`).
+
+#### Report Visualizations Included
+
+1. **Hyperparameter Evolution**:
+   * Evaluated separately for each parameter across iterations $0, 1, \dots, N$. Designed to scale cleanly even when fitting 10+ parameters.
+   * **Solid line** represents the population mean trajectory.
+   * **Translucent shaded band** represents $\pm 1 \text{ SD}$ around the mean.
+   * Hover tooltips display the exact iteration, mean, $+1 \text{ SD}$, and $-1 \text{ SD}$.
+   * Uses raw dictionary keys directly (no human naming or descriptive labels required).
+2. **Model Fit & Convergence**:
+   * **Total Evidence (Log Likelihood)**: Trajectory of total log marginal likelihood summed across all subjects.
+   * **BIC Curve**: Bayesian Information Criterion trajectory across iterations.
+   * **Subject-Level Evidence Trajectories**: Spaghetti plot showing convergence trajectories for individual subjects, alongside the population mean.
+3. **Individual Subject Posterior Means (Graphical, No Raw Numbers)**:
+   * **Histogram Mode (Single Parameter)**: Shows the distribution histogram of subject posterior means across the cohort for any selected parameter.
+   * **2D Scatter Plot Mode (Parameter Pairs)**: Plots individual subject dots in 2D parameter space (e.g. $P_1$ vs $P_2$), showing how subjects distribute without displaying raw numeric tables.
+4. **Multinormal Correlation / Covariance Matrix**:
+   * **Interactive Heatmap**: Displays the correlation / covariance matrix between all parameters in latent space (with values and diverging color gradient), ideal when using `multinormal="full"` or paired correlations.
+
+---
+
+### Model Persistence: `save_model` & `load_model`
+
+Fitted `Sampler` objects can be serialized to disk and restored across sessions:
+
+```python
+# Save model to disk (method on Sampler instance)
 saved_path = sampler.save_model(filename="my_fitted_model", directory="saved_models")
 
-# Load a saved model (imported as a standalone function)
+# Load a saved model (imported separately as a standalone function)
 from importance_sampling import load_model
 
 loaded_sampler = load_model(filename="my_fitted_model", directory="saved_models")
@@ -171,27 +341,60 @@ print(loaded_sampler.evidence[-1])
 print(loaded_sampler.mean_params)
 ```
 
-### 2. Simulating Choices (`sampler.simulate`)
+---
 
-The `simulate` method evaluates choice probabilities using the fitted posterior parameters. It returns the original data as it was (the list of subject datasets), with an added **`mean_choice_probability`** array for each subject (averaged across the parameter samples):
+## Outputs: Accessible Attributes Reference
 
-```python
-sim_data = sampler.simulate()
+All estimation results, subject draws, and metrics are stored directly on the `Sampler` instance:
 
-# Mean choice probability for Subject 0 across trials:
-print(sim_data[0]["mean_choice_probability"])
+| Attribute | Type | Description |
+| :--- | :--- | :--- |
+| `sampler.evidence` | `List[float]` | Total model evidence (log marginal likelihood summed across all subjects) at each iteration. |
+| `sampler.subj_evidence` | `List[List[float]]` | 2D list of shape `(n_iterations, n_subjects)` containing the individual log marginal likelihood for each subject across iterations. |
+| `sampler.evidence_change` | `List[float]` | Difference in total evidence between successive iterations. |
+| `sampler.hyper_params` | `Dict[str, Dict[str, float]]` | Final fitted population distribution in latent normal space: `{"param": {"mean": float, "sd": float}}`. |
+| `sampler.hyper_params_list` | `List[Dict]` | History of population hyper-parameters at each iteration from $0$ to $N$. |
+| `sampler.mean_params` | `Dict[str, List[float]]` | Weighted posterior mean parameter value for each subject: `sampler.mean_params["lr"][subject_idx]`. |
+| `sampler.samples` | `Dict[str, List[np.ndarray]]` | Full array of resampled posterior candidate particles for each subject: `sampler.samples["lr"][subject_idx]`. |
+| `sampler.cor_matrix` | `np.ndarray` | Final parameter correlation matrix in latent normal space (shape `(n_params, n_params)`). |
+| `sampler.cor_matrices` | `List[np.ndarray]` | Parameter correlation matrices across iterations. |
+| `sampler.BIC` | `List[float]` | Bayesian Information Criterion at each iteration (lower is better): $\text{BIC} = -2 \cdot \text{evidence} + k \cdot \ln(N_{\text{choices}} \times N_{\text{subjects}})$. |
+| `sampler.mean_accuracy` | `List[float]` | Average log-likelihood per trial choice: $\text{evidence} / (N_{\text{subjects}} \times \text{n\_choices})$. |
+| `sampler.iterations` | `int` | Number of completed importance sampling iterations. |
+| `sampler.total_fit_time` | `float` | Cumulative model estimation execution time in seconds. |
+| `sampler.summary()` | `None` | Prints a formatted summary table of fit metrics and population parameters to the terminal. |
 
-# Original data fields remain intact:
-print(sim_data[0]["choice"])
-```
+*(For backwards compatibility, `sampler.log_likelihood` aliases `sampler.evidence` and `sampler.log_likelihoods` aliases `sampler.subj_evidence`).*
+
+---
+
+## Built-In Link Functions & Utilities
+
+The package provides numerically stable transformation functions in `importance_sampling`:
+
+* **`sigmoid(x)`**: Maps real numbers $(-\infty, \infty)$ to the open interval $(0, 1)$. Ideal for probabilities and learning rates.
+* **`softplus(x)`**: $\ln(1 + e^x)$, smooth mapping $(-\infty, \infty)$ to strictly positive values $(0, \infty)$. Ideal for inverse temperatures, response noise, and diffusion rates.
+* **`logit(p)`**: Inverse sigmoid mapping probabilities in $(0, 1)$ to real numbers $(-\infty, \infty)$.
+* **`log_sigmoid(x)`**: Numerically stable $\ln(\sigma(x))$.
+* **`logsumexp(a)`**: Stable computation of $\ln\left(\sum e^a\right)$.
+* **`time_to_text(seconds)`**: Converts elapsed seconds into human-readable format (`"1h 12m 30s"`).
 
 ---
 
 ## Demo File (`demo.py`)
 
-For a runnable, self-contained demonstration with simulated data, check out **`demo.py`**.
+For a complete, runnable demonstration with realistic multi-subject data, explore **`demo.py`** in this repository.
 
-While the example above illustrates the workflow, `demo.py` includes a helper function that generates realistic multi-subject data (10 subjects with 30 trials each, containing `trial`, `choice`, `reward1`, and `reward2`), fits the model with the `Sampler`, inspects recovered evidence and subject parameters, simulates choice probabilities, and demonstrates saving and loading. You can open and inspect `demo.py` to try it out and adapt it for your own experiments.
+It contains:
+* A `simulate_data` helper function that simulates data for 10 subjects (30 trials each, with `trial`, `choice`, `reward1`, and `reward2` columns).
+* The single-loop Q-learning model function.
+* Fitting with `Sampler`.
+* Recovered evidence and subject parameter inspection.
+* Choice simulation via `sampler.simulate()`.
+* Model persistence (`save_model` and `load_model`).
+* Interactive Plotly report generation (`sampler.create_report`).
+
+You can open and inspect `demo.py` in your code editor as an easy-to-adapt template for your own multi-subject experiments.
 
 ---
 
