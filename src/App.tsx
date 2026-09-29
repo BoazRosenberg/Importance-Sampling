@@ -919,6 +919,7 @@ export default function App() {
                       const traj = mockTrajectories[key];
                       const finalMean = traj.means[11];
                       const finalSD = (traj.sdUpper[11] - traj.sdLower[11]) / 2;
+                      const isGroupDiffParam = key === 'alpha';
 
                       return (
                         <tr
@@ -931,13 +932,27 @@ export default function App() {
                           <td className="py-2.5 px-4">
                             <input type="checkbox" checked={isSelected} onChange={() => {}} className="rounded text-[#0969da] cursor-pointer" />
                           </td>
-                          <td className="py-2.5 px-4 font-mono font-bold text-[#1f2328]">{key}</td>
-                          <td className="py-2.5 px-4 font-mono text-[#0969da]">{finalMean.toFixed(3)}</td>
-                          <td className="py-2.5 px-4 font-mono text-[#59636e]">{finalSD.toFixed(3)}</td>
-                          <td className="py-2.5 px-4 font-mono text-[#59636e]">
+                          <td className="py-2.5 px-4 font-mono font-bold text-[#1f2328]">
+                            <div className="flex items-center gap-2">
+                              <span>{key}</span>
+                              {isGroupDiffParam && (
+                                <span className="bg-[#8250df]/10 text-[#8250df] text-[10px] px-2 py-0.5 rounded font-semibold border border-[#8250df]/20 font-sans">
+                                  Group Diff: condition
+                                </span>
+                              )}
+                            </div>
+                            {isGroupDiffParam && (
+                              <div className="text-[11px] font-sans text-[#59636e] font-normal mt-1">
+                                Control: <strong>0.352</strong> • Patient: <strong>0.440</strong> • <span className="text-[#8250df] font-semibold">&Delta; = +0.088</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 font-mono text-[#0969da] align-top">{finalMean.toFixed(3)}</td>
+                          <td className="py-2.5 px-4 font-mono text-[#59636e] align-top">{finalSD.toFixed(3)}</td>
+                          <td className="py-2.5 px-4 font-mono text-[#59636e] align-top">
                             [{traj.sdLower[11].toFixed(2)}, {traj.sdUpper[11].toFixed(2)}]
                           </td>
-                          <td className="py-2.5 px-4">
+                          <td className="py-2.5 px-4 align-top">
                             {isSelected ? (
                               <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-[#0969da] text-white">
                                 Active ({selectedParams.indexOf(key) + 1})
@@ -949,6 +964,55 @@ export default function App() {
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* DEDICATED GROUP DIFFERENCES CARD */}
+            <div className="bg-white border border-[#d1d9e0] rounded-xl p-6 shadow-2xs space-y-4">
+              <div className="pb-3 border-b border-[#d1d9e0] flex items-center justify-between">
+                <div>
+                  <h2 className="text-base font-bold text-[#1f2328] flex items-center gap-2">
+                    <SlidersHorizontal className="w-5 h-5 text-[#8250df]" />
+                    Group Differences Estimation (IIS)
+                    <span className="bg-[#8250df]/10 text-[#8250df] text-xs px-2 py-0.5 rounded-full font-semibold border border-[#8250df]/20">
+                      1 Parameter Active
+                    </span>
+                  </h2>
+                  <p className="text-xs text-[#59636e]">
+                    Configured via <code>group_diff=&#123;&quot;alpha&quot;: &quot;condition&quot;&#125;</code> (fits grand mean, pooled SD, and &Delta;group difference; 2 + N-1 hyperparameters).
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border border-[#eaeef2] rounded-lg">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-[#f6f8fa] text-[#59636e] border-b border-[#eaeef2]">
+                    <tr>
+                      <th className="py-2.5 px-4 font-semibold">Parameter</th>
+                      <th className="py-2.5 px-4 font-semibold">Column</th>
+                      <th className="py-2.5 px-4 font-semibold">Control Mean</th>
+                      <th className="py-2.5 px-4 font-semibold">Patient Mean</th>
+                      <th className="py-2.5 px-4 font-semibold">Estimated Difference (&Delta;)</th>
+                      <th className="py-2.5 px-4 font-semibold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#eaeef2]">
+                    <tr className="hover:bg-[#f6f8fa]">
+                      <td className="py-3 px-4 font-bold text-[#1f2328]">alpha</td>
+                      <td className="py-3 px-4 text-[#59636e]">condition</td>
+                      <td className="py-3 px-4 font-bold text-[#0969da]">0.352</td>
+                      <td className="py-3 px-4 font-bold text-[#8250df]">0.440</td>
+                      <td className="py-3 px-4 font-bold text-[#1a7f37]">
+                        +0.088 <span className="text-[11px] text-[#59636e] font-normal">(latent: +0.224)</span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-[#1a7f37]/10 text-[#1a7f37] text-[10px] font-bold border border-[#1a7f37]/20">
+                          Significant Shift
+                        </span>
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -1201,6 +1265,29 @@ compare_models(
                   <li><strong>Evidence &amp; BIC Evolution</strong>: Trajectory curves across iterations for all models on one plot.</li>
                   <li><strong>Final Comparison</strong>: Bar plot and comprehensive summary table with k, Evidence, BIC, and &Delta;BIC.</li>
                   <li><strong>Parameter Comparison</strong>: Population mean &plusmn; 1 SD error bars and subject distributions across models.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
+                  Group Differences Estimation (<code>group_diff</code>)
+                </h2>
+                <p className="mb-2">
+                  Allow specific parameters to have different population means across groups while sharing within-group variance:
+                </p>
+                <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs overflow-x-auto">
+{`sampler = Sampler(
+    data=data,
+    model=q_learning_model,
+    hyper_params=hyper_priors,
+    group_diff={"alpha": "condition"},  # Maps parameter to column in subject data
+)
+sampler.iterative_model_fit(n_iterations=15)`}
+                </pre>
+                <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li>Estimates grand mean, pooled SD, and &Delta; shift for each non-reference group (2 + N - 1 hyperparameters).</li>
+                  <li>Accurately penalizes model degrees of freedom in BIC calculations (+N - 1 per parameter).</li>
+                  <li>Automatically highlighted in <code>create_report()</code> with group difference badges and dedicated comparison cards.</li>
                 </ul>
               </div>
 

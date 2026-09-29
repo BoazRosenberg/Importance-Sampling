@@ -243,6 +243,9 @@ def create_report(
 
         fig_p = go.Figure()
 
+        group_dict = getattr(sampler, "group_diff", None) or getattr(sampler, "params_with_group_diff", {})
+        has_group_diff = param in group_dict
+
         # Ribbon upper bound
         fig_p.add_trace(
             go.Scatter(
@@ -270,27 +273,49 @@ def create_report(
             )
         )
 
-        # Mean line
+        # Grand Mean line
         fig_p.add_trace(
             go.Scatter(
                 x=iters,
                 y=means_plot,
                 mode="lines+markers",
                 line=dict(color=color, width=2.5),
-                marker=dict(size=5, color=color),
-                showlegend=False,
-                name=f"{param} Mean",
-                hovertemplate=f"Iter %{{x}}<br><b>{param} Mean</b>: %{{y:.4f}}<extra></extra>",
+                marker=dict(size=4, color=color),
+                showlegend=has_group_diff,
+                name="Grand Mean" if has_group_diff else f"{param} Mean",
+                hovertemplate=f"Iter %{{x}}<br><b>Grand Mean</b>: %{{y:.4f}}<extra></extra>",
             )
         )
 
+        # Plot individual group means if group differences enabled
+        if has_group_diff:
+            g_colors = ["#0969da", "#8250df", "#cf222e", "#bf8700"]
+            for g_i, g in enumerate(sampler.group_names[param]):
+                g_col = g_colors[g_i % len(g_colors)]
+                g_means_hist = [
+                    hp[param].get("group_means", {}).get(g, hp[param]["mean"])
+                    for hp in sampler.hyper_params_list
+                ]
+                fig_p.add_trace(
+                    go.Scatter(
+                        x=iters,
+                        y=[t_func(m) for m in g_means_hist],
+                        mode="lines+markers",
+                        line=dict(color=g_col, width=2, dash="dash" if g != sampler.ref_group[param] else "solid"),
+                        marker=dict(size=4, color=g_col),
+                        name=f"Group: {g}",
+                        hovertemplate=f"Iter %{{x}}<br><b>Group {g}</b>: %{{y:.4f}}<extra></extra>",
+                    )
+                )
+
         fig_p.update_layout(
             template="plotly_white",
-            height=210,
+            height=220,
             margin=dict(l=45, r=15, t=15, b=35),
             xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
             yaxis=dict(title=param, gridcolor="#eaeef2"),
             hovermode="closest",
+            legend=dict(orientation="h", y=1.12, x=0.02, font=dict(size=10)),
         )
 
         div_p = to_html(fig_p, include_plotlyjs=False, full_html=False, config=plotly_config)
@@ -311,27 +336,47 @@ def create_report(
             color = palette[idx % len(palette)]
             t_func = sampler.transformations[param] if transformed else (lambda x: x)
             vals = [t_func(v) for v in sampler.mean_params[param]]
+            group_dict = getattr(sampler, "group_diff", None) or getattr(sampler, "params_with_group_diff", {})
+            has_group_diff = param in group_dict
 
             fig_s = go.Figure()
-            fig_s.add_trace(
-                go.Scatter(
-                    x=vals,
-                    y=subj_indices,
-                    mode="markers",
-                    marker=dict(
-                        size=8,
-                        color=color,
-                        line=dict(color="#ffffff", width=1),
-                        opacity=0.85,
-                    ),
-                    showlegend=False,
-                    hovertemplate=f"<b>Subject %{{y}}</b><br>{param}: %{{x:.4f}}<extra></extra>",
+
+            if has_group_diff:
+                g_colors = ["#0969da", "#8250df", "#cf222e", "#bf8700"]
+                for g_i, g in enumerate(sampler.group_names[param]):
+                    g_col = g_colors[g_i % len(g_colors)]
+                    sub_idx = [s for s in range(sampler.n_subjects) if sampler.subject_groups[param][s] == g]
+                    if sub_idx:
+                        fig_s.add_trace(
+                            go.Scatter(
+                                x=[vals[s] for s in sub_idx],
+                                y=sub_idx,
+                                mode="markers",
+                                marker=dict(size=8, color=g_col, line=dict(color="#ffffff", width=1), opacity=0.85),
+                                name=f"{g}",
+                                hovertemplate=f"<b>Subj %{{y}} ({g})</b><br>{param}: %{{x:.4f}}<extra></extra>",
+                            )
+                        )
+            else:
+                fig_s.add_trace(
+                    go.Scatter(
+                        x=vals,
+                        y=subj_indices,
+                        mode="markers",
+                        marker=dict(
+                            size=8,
+                            color=color,
+                            line=dict(color="#ffffff", width=1),
+                            opacity=0.85,
+                        ),
+                        showlegend=False,
+                        hovertemplate=f"<b>Subject %{{y}}</b><br>{param}: %{{x:.4f}}<extra></extra>",
+                    )
                 )
-            )
 
             fig_s.update_layout(
                 template="plotly_white",
-                height=210,
+                height=220,
                 margin=dict(l=45, r=15, t=15, b=35),
                 xaxis=dict(title=f"{param} Mean", gridcolor="#eaeef2"),
                 yaxis=dict(
@@ -340,6 +385,7 @@ def create_report(
                     dtick=max(1, sampler.n_subjects // 5),
                 ),
                 hovermode="closest",
+                legend=dict(orientation="h", y=1.12, x=0.02, font=dict(size=10)),
             )
 
             div_s = to_html(fig_s, include_plotlyjs=False, full_html=False, config=plotly_config)
@@ -395,12 +441,37 @@ def create_report(
         lower_bound = t_func(raw_m - raw_sd)
         upper_bound = t_func(raw_m + raw_sd)
 
+        # Check for group differences on this parameter
+        group_dict = getattr(sampler, "group_diff", None) or getattr(sampler, "params_with_group_diff", {})
+        has_group_diff = p in group_dict
+        group_badge = ""
+        group_details_html = ""
+        if has_group_diff:
+            col_name = group_dict[p]
+            g_means = sampler.group_means.get(p, {})
+            g_diffs = sampler.group_diffs.get(p, {})
+            ref_g = sampler.ref_group.get(p, "")
+            group_badge = f'<span style="background: rgba(130, 80, 223, 0.12); color: #8250df; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 6px;">Group Diff: {col_name}</span>'
+
+            # Format group means in domain space
+            g_means_str = ", ".join([f"<strong>{g}</strong>: {t_func(m):.4f}" for g, m in g_means.items()])
+            diffs_str = ", ".join([f"<strong>Δ({pair})</strong> = {t_func(g_means[pair.split(' - ')[0]]) - t_func(g_means[ref_g]):+.4f} (latent: {d:+.4f})" for pair, d in g_diffs.items()])
+            group_details_html = f"""
+            <div style="font-size: 11px; margin-top: 4px; color: #59636e; font-family: -apple-system, BlinkMacSystemFont, sans-serif;">
+                <span>Group Means: {g_means_str}</span><br>
+                <span style="color: #8250df; font-weight: 600;">{diffs_str}</span>
+            </div>
+            """
+
         table_rows_html += f"""
         <tr style="border-bottom: 1px solid #eaeef2;">
-            <td style="padding: 10px 14px; font-weight: 600; font-family: monospace;">{p}</td>
-            <td style="padding: 10px 14px; font-family: monospace; color: #0969da;">{fitted_mean:.4f}</td>
-            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{fitted_sd:.4f}</td>
-            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">[{lower_bound:.3f}, {upper_bound:.3f}]</td>
+            <td style="padding: 10px 14px;">
+                <span style="font-weight: 600; font-family: monospace;">{p}</span>{group_badge}
+                {group_details_html}
+            </td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #0969da; vertical-align: top;">{fitted_mean:.4f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e; vertical-align: top;">{fitted_sd:.4f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e; vertical-align: top;">[{lower_bound:.3f}, {upper_bound:.3f}]</td>
         </tr>
         """
 
@@ -435,6 +506,72 @@ def create_report(
         """
         for c in subject_divs
     ])
+
+    # Group Differences Dedicated Card
+    group_diff_card_html = ""
+    group_dict_all = getattr(sampler, "group_diff", None) or getattr(sampler, "params_with_group_diff", {})
+    if group_dict_all:
+        group_rows_html = ""
+        for p, col_name in group_dict_all.items():
+            t_func = sampler.transformations[p] if transformed else (lambda x: x)
+            ref_g = sampler.ref_group.get(p, "")
+            g_means = sampler.group_means.get(p, {})
+            g_diffs = sampler.group_diffs.get(p, {})
+
+            for pair, diff_val in g_diffs.items():
+                target_g = pair.split(" - ")[0]
+                m_ref = g_means.get(ref_g, 0.0)
+                m_tar = g_means.get(target_g, 0.0)
+                t_ref = t_func(m_ref)
+                t_tar = t_func(m_tar)
+                t_diff = t_tar - t_ref
+
+                group_rows_html += f"""
+                <tr style="border-bottom: 1px solid #eaeef2;">
+                    <td style="padding: 10px 14px; font-weight: 700; font-family: monospace;">{p}</td>
+                    <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{col_name}</td>
+                    <td style="padding: 10px 14px; font-family: monospace;">{ref_g}: <strong>{t_ref:.4f}</strong> (latent: {m_ref:.4f})</td>
+                    <td style="padding: 10px 14px; font-family: monospace;">{target_g}: <strong>{t_tar:.4f}</strong> (latent: {m_tar:.4f})</td>
+                    <td style="padding: 10px 14px; font-family: monospace; font-weight: 700; color: {'#0969da' if t_diff > 0 else '#cf222e'};">
+                        {t_diff:+.4f} (latent: {diff_val:+.4f})
+                    </td>
+                </tr>
+                """
+
+        group_diff_card_html = f"""
+        <!-- GROUP DIFFERENCES SUMMARY CARD -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
+                        <span>Group Differences Analysis</span>
+                        <span style="background: rgba(130, 80, 223, 0.12); color: #8250df; padding: 2px 8px; border-radius: 999px; font-size: 11px;">
+                            Active
+                        </span>
+                    </div>
+                    <div class="card-subtitle">
+                        Estimated separate group means and between-group shifts (2 + N-1 hyperparameters per parameter).
+                    </div>
+                </div>
+            </div>
+            <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Group Column</th>
+                            <th>Reference Group Mean</th>
+                            <th>Target Group Mean</th>
+                            <th>Estimated Difference (Δ)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {group_rows_html}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        """
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -598,6 +735,8 @@ def create_report(
                 </table>
             </div>
         </div>
+
+        {group_diff_card_html}
 
         <!-- 4. HYPERPARAMETER EVOLUTION GRID (3 PER ROW) -->
         <div class="card">

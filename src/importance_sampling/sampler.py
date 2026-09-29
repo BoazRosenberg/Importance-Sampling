@@ -70,6 +70,9 @@ class Sampler:
         description: str = "",
         type: str = "B",
         random_state: Optional[Union[int, np.random.Generator]] = None,
+        group_diff: Optional[Union[Dict[str, str], Sequence[str]]] = None,
+        group_column: str = "group",
+        params_with_group_diff: Optional[Union[Dict[str, str], Sequence[str]]] = None,
     ):
         self.data = list(data)
         self.model = model
@@ -94,7 +97,7 @@ class Sampler:
         )
 
         # Extract latent normal mean and sd, plus optional transforms
-        self.hyper_params: Dict[str, Dict[str, float]] = {}
+        self.hyper_params: Dict[str, Dict[str, Any]] = {}
         auto_transforms: Dict[str, Callable] = {}
         for k, v in hyper_params.items():
             self.hyper_params[k] = {
@@ -113,6 +116,63 @@ class Sampler:
                 self.transformations[p] = auto_transforms[p]
             else:
                 self.transformations[p] = lambda x: x
+
+        # Configure parameters with group differences
+        effective_group_diff = group_diff if group_diff is not None else params_with_group_diff
+        self.group_diff: Dict[str, str] = {}
+        if isinstance(effective_group_diff, dict):
+            self.group_diff = {
+                p: str(col) for p, col in effective_group_diff.items() if p in self.params
+            }
+        elif isinstance(effective_group_diff, (list, tuple, set)):
+            self.group_diff = {
+                p: group_column for p in effective_group_diff if p in self.params
+            }
+
+        # Backwards compatibility alias
+        self.params_with_group_diff = self.group_diff
+
+        def _extract_subject_group(subj_data: Any, col: str) -> str:
+            if hasattr(subj_data, "__getitem__"):
+                try:
+                    val = subj_data[col]
+                    if hasattr(val, "iloc"):
+                        val = val.iloc[0]
+                    elif isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
+                        val = val[0]
+                    return str(val)
+                except (KeyError, IndexError, TypeError):
+                    pass
+            if hasattr(subj_data, col):
+                val = getattr(subj_data, col)
+                if hasattr(val, "iloc"):
+                    val = val.iloc[0]
+                elif isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
+                    val = val[0]
+                return str(val)
+            return "default"
+
+        self.subject_groups: Dict[str, List[str]] = {}
+        self.group_names: Dict[str, List[str]] = {}
+        self.ref_group: Dict[str, str] = {}
+        self.group_means: Dict[str, Dict[str, float]] = {}
+        self.group_diffs: Dict[str, Dict[str, float]] = {}
+        self.group_means_list: Dict[str, List[Dict[str, float]]] = {}
+        self.group_diffs_list: Dict[str, List[Dict[str, float]]] = {}
+
+        for p, col in self.group_diff.items():
+            s_groups = [_extract_subject_group(d, col) for d in self.data]
+            self.subject_groups[p] = s_groups
+            unique_groups = sorted(list(set(s_groups)))
+            self.group_names[p] = unique_groups
+            self.ref_group[p] = unique_groups[0]
+            init_mean = self.hyper_params[p]["mean"]
+            self.group_means[p] = {g: float(init_mean) for g in unique_groups}
+            self.group_diffs[p] = {f"{g} - {unique_groups[0]}": 0.0 for g in unique_groups[1:]}
+            self.group_means_list[p] = [copy.deepcopy(self.group_means[p])]
+            self.group_diffs_list[p] = [copy.deepcopy(self.group_diffs[p])]
+            self.hyper_params[p]["group_means"] = copy.deepcopy(self.group_means[p])
+            self.hyper_params[p]["group_diffs"] = copy.deepcopy(self.group_diffs[p])
 
         # Correlation matrix
         self.multinormal = multinormal
@@ -216,13 +276,17 @@ class Sampler:
             ).T
 
         # Scale by subject hyper_params in latent space
-        raw_samples = {
-            param: (
+        raw_samples = {}
+        for i, param in enumerate(self.params):
+            if param in self.group_diff:
+                s_group = self.subject_groups[param][subj]
+                center_mean = self.group_means[param][s_group]
+            else:
+                center_mean = self.hyper_params[param]["mean"]
+            raw_samples[param] = (
                 std_normals[i] * self.hyper_params[param]["sd"]
-                + self.hyper_params[param]["mean"]
+                + center_mean
             )
-            for i, param in enumerate(self.params)
-        }
 
         # Pre-transform candidate parameter particles into their valid bounds
         transformed_samples = {
@@ -296,14 +360,57 @@ class Sampler:
             for param in self.params
         }
 
-        # Recalculate population mean and standard deviation
-        updated_priors = {
-            param: {
-                "mean": float(np.mean(pooled_samples[param])),
-                "sd": float(np.std(pooled_samples[param], ddof=1)),
-            }
-            for param in self.params
-        }
+        # Recalculate population mean, standard deviation, and group differences
+        updated_priors = {}
+        for param in self.params:
+            if param in self.group_diff:
+                unique_groups = self.group_names[param]
+                ref_g = self.ref_group[param]
+                g_means: Dict[str, float] = {}
+                residuals = []
+
+                for g in unique_groups:
+                    subj_indices = [
+                        s for s in range(self.n_subjects)
+                        if self.subject_groups[param][s] == g
+                    ]
+                    if subj_indices:
+                        g_particles = np.concatenate([subject_samples[param][s] for s in subj_indices])
+                        m_g = float(np.mean(g_particles))
+                        g_means[g] = m_g
+                        residuals.extend([
+                            subject_samples[param][s] - m_g for s in subj_indices
+                        ])
+                    else:
+                        g_means[g] = float(self.group_means[param].get(g, 0.0))
+
+                self.group_means[param] = g_means
+                ref_mean = g_means[ref_g]
+                self.group_diffs[param] = {
+                    f"{g} - {ref_g}": float(g_means[g] - ref_mean)
+                    for g in unique_groups[1:]
+                }
+
+                # Pooled within-group standard deviation
+                pooled_res = np.concatenate(residuals) if residuals else pooled_samples[param]
+                pooled_sd = float(np.std(pooled_res, ddof=1)) if len(pooled_res) > 1 else float(self.hyper_params[param]["sd"])
+
+                # Grand mean across subjects
+                grand_mean = float(np.mean(pooled_samples[param]))
+
+                updated_priors[param] = {
+                    "mean": grand_mean,
+                    "sd": pooled_sd,
+                    "group_means": copy.deepcopy(g_means),
+                    "group_diffs": copy.deepcopy(self.group_diffs[param]),
+                }
+                self.group_means_list[param].append(copy.deepcopy(g_means))
+                self.group_diffs_list[param].append(copy.deepcopy(self.group_diffs[param]))
+            else:
+                updated_priors[param] = {
+                    "mean": float(np.mean(pooled_samples[param])),
+                    "sd": float(np.std(pooled_samples[param], ddof=1)),
+                }
 
         self.hyper_params_list.append(copy.deepcopy(updated_priors))
         self.hyper_params = updated_priors
@@ -343,10 +450,16 @@ class Sampler:
         sample_size = max(1, self.n_subjects * self.n_choices)
         self.mean_accuracy.append(iter_evidence / sample_size)
 
+        # Base hyperparameters: 2 per parameter (mean and sd)
+        # Plus (N_groups - 1) additional hyperparameters for each parameter with group difference
+        # Total parameters: 2 + (N_groups - 1) = N_groups + 1 per group-difference parameter
+        extra_group_hyper = sum(
+            max(0, len(self.group_names[p]) - 1) for p in self.group_diff
+        )
         if self.multinormal == "full":
-            n_hyper = 2 * self.n_params + self.n_params * (self.n_params - 1) / 2
+            n_hyper = 2 * self.n_params + self.n_params * (self.n_params - 1) / 2 + extra_group_hyper
         else:
-            n_hyper = 2 * self.n_params
+            n_hyper = 2 * self.n_params + extra_group_hyper
         bic_val = float(-2.0 * iter_evidence + n_hyper * np.log(sample_size))
         self.BIC.append(bic_val)
 
