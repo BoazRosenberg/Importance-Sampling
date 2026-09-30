@@ -253,9 +253,8 @@ Runs the iterative importance sampling estimation loop until maximum iterations 
   If `True`, prints clean iteration timestamps, evidence change, and elapsed/remaining durations.
 * **`progress_bar`** (`Union[bool, str]`, default=`True`):
   Controls progress bar display:
-  * `True` (or `"single"`): Displays **one clean, in-place progress bar** tracking iterations with live subject progress in the postfix (`subj: 32/96`), eliminating multi-line terminal spam.
-  * `"nested"`: Displays both outer iteration and inner subject bars.
-  * `"subjects"`: Displays only the subject progress bar.
+  * `True` (or `"iteration"`): Displays a progress bar for **each iteration** that fills across subjects (0 to N subjects). When each iteration completes, its progress bar remains in place displaying the complete iteration summary: duration (`Took`), BIC, log-likelihood (`Ev`), change in likelihood (`ΔEv`), moving-average change over the last `n_mean` iterations (`ΔEv({n_mean})` convergence metric), and total time elapsed (`Elapsed`).
+  * `"overall"` (or `"single"`): Displays a single progress bar for all iterations.
   * `False`: Disables all progress bars.
 
 ---
@@ -407,7 +406,7 @@ Generates an interactive comparative report widget to evaluate two or more fitte
    * **Final Model Ranking Table**: Ranks models by BIC (lowest is best), reporting $k$ parameters, Final Evidence, Final BIC, and $\Delta\text{BIC}$ relative to the winning model.
    * **Percentage of Participants Best Explained**: Reports the percentage and exact subject counts where each model achieved the highest individual log-marginal likelihood $\ln p(D_s \mid M)$.
 2. **Page 2: Parameter Inclusion Matrix & Collapsible Code**:
-   * **Parameter Overview Matrix Table**: Parameters listed on the Y-axis, compared models on the X-axis. Cells show whether each parameter is included (with fitted population mean and SD) or excluded (`—`), clearly distinguishing shared parameters from model-specific parameters.
+   * **Parameter Overview Matrix Table**: Parameters listed on the Y-axis, compared models on the X-axis. Clean visual matrix with filled squares for included parameters, center dots for parameters with group differences, and dashed outlines for excluded parameters, accompanied by concise model descriptions.
    * **Collapsible Model Functions Code**: Tabbed viewer displaying the exact Python implementation function for each model, with a collapse/expand toggle to preserve vertical space and a one-click copy button.
 3. **Page 3: Parameter Evolution Comparison Plots**:
    * **Shared Parameters Plotted Together**: When a parameter repeats across multiple models (e.g. `alpha` or `beta`), all models containing it are displayed on the **same subplot** with distinct color-coded curves and $\pm 1 \text{ SD}$ uncertainty ribbons for direct visual comparison.

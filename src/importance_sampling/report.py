@@ -1714,18 +1714,37 @@ def compare_models(
         for name in model_names
     ])
 
-    # Simplistic matrix table: filled squares representing the parameters, no text in cells
+    # Simplistic matrix table: filled squares representing the parameters, with center dot for group differences
     matrix_rows_html = ""
     for p in all_unique_params:
         cells_html = ""
         for name in model_names:
             m = model_dict[name]
+            group_diff_data = getattr(m, "group_diff", None) or getattr(m, "params_with_group_diff", None)
+            if group_diff_data is None and hasattr(m, "metadata") and isinstance(m.metadata, dict):
+                group_diff_data = m.metadata.get("group_diff", None)
+
+            has_group_diff = False
+            if isinstance(group_diff_data, dict):
+                has_group_diff = p in group_diff_data
+            elif isinstance(group_diff_data, (list, tuple, set)):
+                has_group_diff = p in group_diff_data
+
             if p in m.params:
-                cells_html += f"""
-                <td style="padding: 10px 14px; text-align: center; vertical-align: middle;">
-                    <span style="display: inline-block; width: 22px; height: 22px; border-radius: 4px; background: {model_colors[name]}; box-shadow: 0 1px 2px rgba(0,0,0,0.12);" title="{name} includes {p}"></span>
-                </td>
-                """
+                if has_group_diff:
+                    cells_html += f"""
+                    <td style="padding: 10px 14px; text-align: center; vertical-align: middle;">
+                        <span style="display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px; background: {model_colors[name]}; box-shadow: 0 1px 2px rgba(0,0,0,0.12);" title="{name} includes {p} (with group differences)">
+                            <span style="width: 7px; height: 7px; border-radius: 50%; background: #ffffff; display: block; box-shadow: 0 0.5px 1px rgba(0,0,0,0.3);"></span>
+                        </span>
+                    </td>
+                    """
+                else:
+                    cells_html += f"""
+                    <td style="padding: 10px 14px; text-align: center; vertical-align: middle;">
+                        <span style="display: inline-block; width: 22px; height: 22px; border-radius: 4px; background: {model_colors[name]}; box-shadow: 0 1px 2px rgba(0,0,0,0.12);" title="{name} includes {p}"></span>
+                    </td>
+                    """
             else:
                 cells_html += f"""
                 <td style="padding: 10px 14px; text-align: center; vertical-align: middle;">
@@ -2257,9 +2276,10 @@ def compare_models(
                             </tr>
                         </tfoot>
                     </table>
-                    <div style="padding: 8px 14px; font-size: 11px; color: #59636e; background: #f6f8fa; border-top: 1px solid #eaeef2; display: flex; align-items: center; gap: 16px;">
-                        <span><span style="display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #0969da; vertical-align: middle; margin-right: 4px;"></span> Filled square = Included in model</span>
-                        <span><span style="display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1.5px dashed #d1d9e0; background: transparent; vertical-align: middle; margin-right: 4px;"></span> Dashed outline = Excluded</span>
+                    <div style="padding: 8px 14px; font-size: 11px; color: #59636e; background: #f6f8fa; border-top: 1px solid #eaeef2; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                        <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #0969da; vertical-align: middle;"></span> Filled square = Included in model</span>
+                        <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 3px; background: #0969da; vertical-align: middle;"><span style="width: 5px; height: 5px; border-radius: 50%; background: #ffffff;"></span></span> Filled square with dot = Group differences for parameter</span>
+                        <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1.5px dashed #d1d9e0; background: transparent; vertical-align: middle;"></span> Dashed outline = Excluded</span>
                     </div>
                 </div>
             </div>

@@ -1075,110 +1075,151 @@ class Sampler:
             Whether to print detailed diagnostics at each iteration.
         progress_bar : Union[bool, str], default=True
             Progress bar display mode:
-            - True (or 'single'): Displays ONE clean in-place progress bar tracking iterations
-              with live subject sub-progress in the postfix (no multi-line spam).
-            - 'nested': Displays both iteration and subject progress bars.
-            - 'subjects': Displays only subject progress bar for each iteration.
+            - True (or 'iteration'): Displays a new progress bar for each iteration that fills
+              across subjects (0 to N subjects). When each iteration completes, its progress bar
+              remains in place displaying a complete summary: duration (Took), BIC, log-likelihood
+              (Ev), change in likelihood (ΔEv), change in likelihood over the last n_mean iterations
+              (ΔEv window convergence metric), and total elapsed time.
+            - 'overall' (or 'single'): Displays a single progress bar for all iterations.
             - False: Disables progress bars.
         """
         start = time.time()
-        iter_range = range(n_iterations)
+        iter_mode = "iteration" if progress_bar in (True, "iteration", "iter", "per_iteration") else progress_bar
 
-        show_iter_bar = progress_bar in (True, "single", "nested")
-        show_subj_bar = progress_bar in ("nested", "subjects")
-
-        iter_pbar = (
-            tqdm(
-                iter_range,
+        if iter_mode in ("overall", "single"):
+            overall_pbar = tqdm(
+                range(n_iterations),
                 desc=f"Fitting {self.model_name}",
                 unit="iter",
                 leave=True,
                 file=sys.stdout,
                 dynamic_ncols=True,
             )
-            if show_iter_bar
-            else iter_range
-        )
+        else:
+            overall_pbar = None
 
-        for i in iter_pbar:
-            # Live subject sub-progress callback on the single progress bar
+        for i in range(n_iterations):
+            iter_start = time.time()
+            current_iter_num = i + 1
+
+            # Per-iteration progress bar that fills across subjects
+            if iter_mode == "iteration":
+                iter_pbar = tqdm(
+                    total=self.n_subjects,
+                    desc=f"Iter {current_iter_num:>{len(str(n_iterations))}}/{n_iterations}",
+                    unit="subj",
+                    leave=True,
+                    file=sys.stdout,
+                    dynamic_ncols=True,
+                )
+            else:
+                iter_pbar = None
+
             def _on_subj_progress(curr: int, total: int) -> None:
-                if show_iter_bar and not show_subj_bar and hasattr(iter_pbar, "set_postfix"):
-                    if curr == total or curr % max(1, total // 8) == 0:
-                        p_data: Dict[str, Any] = {"subj": f"{curr}/{total}"}
-                        if self.evidence:
-                            p_data["Evidence"] = f"{self.evidence[-1]:.2f}"
-                            p_data["BIC"] = f"{self.BIC[-1]:.2f}"
-                        iter_pbar.set_postfix(p_data, refresh=True)
+                if iter_pbar is not None:
+                    iter_pbar.update(1)
+                elif overall_pbar is not None and hasattr(overall_pbar, "set_postfix"):
+                    if curr == total or curr % max(1, total // 5) == 0:
+                        overall_pbar.set_postfix({"subj": f"{curr}/{total}"}, refresh=True)
 
-            # Within-iteration progress across subjects
+            # Within-iteration progress across subjects (disable nested bar to prevent spam)
             self.adjust_hyper_priors(
                 n_samples=n_samples,
-                disable_progress=not show_subj_bar,
+                disable_progress=True,
                 leave=False,
-                progress_callback=_on_subj_progress if (show_iter_bar and not show_subj_bar) else None,
-                position=1 if show_subj_bar and show_iter_bar else 0,
+                progress_callback=_on_subj_progress if (iter_pbar is not None or overall_pbar is not None) else None,
             )
             self.iterations += 1
 
-            # Update tqdm postfix with completed iteration diagnostics
-            if show_iter_bar and hasattr(iter_pbar, "set_postfix"):
-                postfix_data = {
-                    "Evidence": f"{self.evidence[-1]:.2f}",
-                    "BIC": f"{self.BIC[-1]:.2f}",
-                }
-                if len(self.evidence_change) > 0:
-                    postfix_data["ΔEv"] = f"{self.evidence_change[-1]:+.2f}"
-                iter_pbar.set_postfix(postfix_data, refresh=True)
+            iter_duration = time.time() - iter_start
+            total_elapsed = time.time() - start
+
+            # Diagnostics calculation
+            curr_ev = self.evidence[-1]
+            curr_bic = self.BIC[-1]
+
+            if len(self.evidence_change) > 0:
+                delta_ev = self.evidence_change[-1]
+                delta_ev_str = f"{delta_ev:+.4f}"
+            else:
+                delta_ev_str = "—"
+
+            # Change in likelihood over last n iterations (moving average convergence metric)
+            if i >= n_mean:
+                window_change = (self.evidence[-1] - self.evidence[-1 - n_mean]) / n_mean
+                window_change_str = f"{window_change:+.4f}"
+            elif i > 0:
+                window_change = (self.evidence[-1] - self.evidence[0]) / i
+                window_change_str = f"{window_change:+.4f} (n={i})"
+            else:
+                window_change_str = "—"
+
+            iter_took_str = time_to_text(iter_duration)
+            total_elapsed_str = time_to_text(total_elapsed)
+
+            summary_postfix = {
+                "Ev": f"{curr_ev:.4f}",
+                "ΔEv": delta_ev_str,
+                f"ΔEv({n_mean})": window_change_str,
+                "BIC": f"{curr_bic:.2f}",
+                "Took": iter_took_str,
+                "Elapsed": total_elapsed_str,
+            }
+
+            if iter_pbar is not None:
+                iter_pbar.set_postfix(summary_postfix, refresh=True)
+                iter_pbar.close()
+
+            if overall_pbar is not None:
+                overall_pbar.update(1)
+                overall_pbar.set_postfix(summary_postfix, refresh=True)
 
             # Convergence check over window of n_mean iterations
             change = 0.0
             converged = False
             if i >= n_mean:
-                change = (self.evidence[-1] - self.evidence[-n_mean]) / n_mean
+                change = (self.evidence[-1] - self.evidence[-1 - n_mean]) / n_mean
                 if change < epsilon and stop_at_convergence:
                     converged = True
 
             if converged:
                 msg = (
-                    f"✨ Converged after {i + 1} iterations. "
-                    f"Evidence: {self.evidence[-1]:.4f}, BIC: {self.BIC[-1]:.2f}"
+                    f"✨ Converged after {current_iter_num} iterations. "
+                    f"Evidence: {curr_ev:.4f} | BIC: {curr_bic:.2f} | "
+                    f"ΔEv({n_mean}): {change:+.4f} < {epsilon} | Total Time: {total_elapsed_str}"
                 )
-                if show_iter_bar:
+                if iter_mode == "iteration":
                     tqdm.write(msg, file=sys.stdout)
                 else:
                     print(msg)
-                self.total_fit_time += time.time() - start
+                self.total_fit_time += total_elapsed
                 break
 
-            elapsed = time.time() - start
-            predicted_duration = (elapsed / (i + 1)) * (n_iterations - i - 1)
-
-            if verbose:
+            if verbose and iter_mode != "iteration":
                 msg = (
-                    f"Iter {i + 1}/{n_iterations} | "
-                    f"Evidence: {self.evidence[-1]:.4f} (ΔEv: {self.evidence_change[-1]:+.4f}) | "
-                    f"BIC: {self.BIC[-1]:.2f} | "
-                    f"Elapsed: {time_to_text(elapsed)} | Remaining: {time_to_text(predicted_duration)}"
+                    f"Iter {current_iter_num}/{n_iterations} | "
+                    f"Evidence: {curr_ev:.4f} (ΔEv: {delta_ev_str}) | "
+                    f"ΔEv({n_mean}): {window_change_str} | "
+                    f"BIC: {curr_bic:.2f} | "
+                    f"Took: {iter_took_str} | Elapsed: {total_elapsed_str}"
                 )
-                if show_iter_bar:
-                    tqdm.write(msg, file=sys.stdout)
-                else:
-                    print(msg)
+                print(msg)
         else:
+            total_elapsed = time.time() - start
             if verbose:
                 msg = (
                     f"Completed all {n_iterations} iterations. "
-                    f"Evidence: {self.evidence[-1]:.4f}, BIC: {self.BIC[-1]:.2f}"
+                    f"Evidence: {self.evidence[-1]:.4f} | BIC: {self.BIC[-1]:.2f} | "
+                    f"Total Time: {time_to_text(total_elapsed)}"
                 )
-                if show_iter_bar:
+                if iter_mode == "iteration":
                     tqdm.write(msg, file=sys.stdout)
                 else:
                     print(msg)
-            self.total_fit_time += time.time() - start
+            self.total_fit_time += total_elapsed
 
-        if show_iter_bar and hasattr(iter_pbar, "close"):
-            iter_pbar.close()
+        if overall_pbar is not None:
+            overall_pbar.close()
 
         self.last_fit_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         self.metadata = self.get_metadata()

@@ -118,6 +118,7 @@ interface ModelComparisonEntry {
   color: string;
   k: number;
   params: string[];
+  groupDiffParams?: string[];
   evidenceHistory: number[];
   bicHistory: number[];
   finalEvidence: number;
@@ -142,6 +143,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     color: '#0969da',
     k: 3,
     params: ['alpha', 'beta', 'pers'],
+    groupDiffParams: ['alpha'],
     evidenceHistory: [-212.4, -188.2, -172.5, -161.8, -154.2, -149.1, -145.7, -143.5, -142.4, -141.8, -141.5, -141.3],
     bicHistory: [434.1, 385.7, 354.3, 332.9, 317.7, 307.5, 300.7, 296.3, 294.1, 292.9, 292.3, 291.9],
     finalEvidence: -141.3,
@@ -185,6 +187,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     color: '#1a7f37',
     k: 2,
     params: ['alpha', 'beta'],
+    groupDiffParams: [],
     evidenceHistory: [-218.0, -195.4, -182.1, -174.5, -168.2, -164.5, -162.1, -160.8, -160.2, -159.9, -159.7, -159.5],
     bicHistory: [442.0, 396.8, 370.2, 355.0, 342.4, 335.0, 330.2, 327.6, 326.4, 325.8, 325.4, 325.0],
     finalEvidence: -159.5,
@@ -224,6 +227,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     color: '#8250df',
     k: 3,
     params: ['alpha_pos', 'alpha_neg', 'beta'],
+    groupDiffParams: ['alpha_pos'],
     evidenceHistory: [-215.2, -191.0, -177.3, -169.1, -163.5, -159.8, -157.2, -155.5, -154.8, -154.2, -154.0, -153.8],
     bicHistory: [439.7, 391.3, 363.9, 347.5, 336.3, 328.9, 323.7, 320.3, 318.9, 317.7, 317.3, 316.9],
     finalEvidence: -153.8,
@@ -267,6 +271,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     color: '#cf222e',
     k: 1,
     params: ['bias'],
+    groupDiffParams: [],
     evidenceHistory: [-232.0, -225.1, -222.0, -220.5, -219.8, -219.5, -219.4, -219.3, -219.3, -219.3, -219.3, -219.3],
     bicHistory: [467.0, 453.2, 447.0, 444.0, 442.6, 442.0, 441.8, 441.6, 441.6, 441.6, 441.6, 441.6],
     finalEvidence: -219.3,
@@ -1025,7 +1030,7 @@ export default function App() {
                       Parameter Inclusion Overview Matrix
                     </h3>
                     <p className="text-xs text-[#59636e]">
-                      Parameters on Y-axis, Models on X-axis. Filled squares represent parameters included in each model without text clutter.
+                      Parameters on Y-axis, Models on X-axis. Empty if excluded, full if included, and full with a center dot if group differences are modeled.
                     </p>
                   </div>
 
@@ -1073,16 +1078,27 @@ export default function App() {
 
                               {activeModelList.map((m) => {
                                 const isIncluded = m.params.includes(pKey);
+                                const hasGroupDiff = Boolean(m.groupDiffParams?.includes(pKey));
 
                                 return (
                                   <td key={m.name} className="py-2.5 px-4 text-center align-middle">
                                     <div className="flex justify-center items-center">
                                       {isIncluded ? (
-                                        <div
-                                          className="w-5 h-5 rounded-sm shadow-2xs transition-transform hover:scale-110"
-                                          style={{ backgroundColor: m.color }}
-                                          title={`${m.name} includes ${pKey}`}
-                                        />
+                                        hasGroupDiff ? (
+                                          <div
+                                            className="w-5 h-5 rounded-sm shadow-2xs flex items-center justify-center transition-transform hover:scale-110"
+                                            style={{ backgroundColor: m.color }}
+                                            title={`${m.name} includes ${pKey} (with group differences)`}
+                                          >
+                                            <span className="w-1.5 h-1.5 rounded-full bg-white shadow-xs" />
+                                          </div>
+                                        ) : (
+                                          <div
+                                            className="w-5 h-5 rounded-sm shadow-2xs transition-transform hover:scale-110"
+                                            style={{ backgroundColor: m.color }}
+                                            title={`${m.name} includes ${pKey}`}
+                                          />
+                                        )
                                       ) : (
                                         <div
                                           className="w-5 h-5 rounded-sm border border-dashed border-[#d1d9e0] bg-[#f6f8fa]/60"
@@ -1109,10 +1125,16 @@ export default function App() {
                       </tfoot>
                     </table>
 
-                    <div className="p-3 bg-[#f6f8fa] border-t border-[#eaeef2] text-[11px] text-[#59636e] font-sans flex items-center gap-6">
+                    <div className="p-3 bg-[#f6f8fa] border-t border-[#eaeef2] text-[11px] text-[#59636e] font-sans flex items-center gap-6 flex-wrap">
                       <span className="flex items-center gap-1.5">
                         <span className="w-3.5 h-3.5 rounded-sm bg-[#0969da] inline-block shadow-2xs" />
                         <span>Filled square = Parameter is included in model</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 rounded-sm bg-[#0969da] inline-flex items-center justify-center shadow-2xs">
+                          <span className="w-1 h-1 rounded-full bg-white" />
+                        </span>
+                        <span>Filled square with dot = Group differences for parameter</span>
                       </span>
                       <span className="flex items-center gap-1.5">
                         <span className="w-3.5 h-3.5 rounded-sm border border-dashed border-[#d1d9e0] bg-white inline-block" />
