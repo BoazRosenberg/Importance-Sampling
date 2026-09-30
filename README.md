@@ -225,8 +225,8 @@ sampler.iterative_model_fit(
     epsilon: float = 0.01,
     n_mean: int = 10,
     stop_at_convergence: bool = True,
-    verbose: bool = True,
-    progress_bar: bool = True,
+    verbose: bool = False,
+    progress_bar: Union[bool, str] = True,
 ) -> "Sampler"
 ```
 
@@ -245,53 +245,93 @@ Runs the iterative importance sampling estimation loop until maximum iterations 
   Window size in iterations used for the moving convergence check.
 * **`stop_at_convergence`** (`bool`, default=`True`):
   Whether to terminate early when the convergence threshold is reached.
-* **`verbose`** (`bool`, default=`True`):
-  If `True`, prints iteration progress, elapsed time, predicted time remaining, total evidence, and convergence notices.
-* **`progress_bar`** (`bool`, default=`True`):
-  If `True`, displays `tqdm` progress bars across iterations and within iterations (for subjects), updating live with Evidence, BIC, and &Delta;Evidence.
+* **`verbose`** (`bool`, default=`False`):
+  If `True`, prints clean iteration timestamps, evidence change, and elapsed/remaining durations.
+* **`progress_bar`** (`Union[bool, str]`, default=`True`):
+  Controls progress bar display:
+  * `True` (or `"single"`): Displays **one clean, in-place progress bar** tracking iterations with live subject progress in the postfix (`subj: 32/96`), eliminating multi-line terminal spam.
+  * `"nested"`: Displays both outer iteration and inner subject bars.
+  * `"subjects"`: Displays only the subject progress bar.
+  * `False`: Disables all progress bars.
 
 ---
 
 ### Simulation Method: `sampler.simulate`
 
 ```python
-sampler.simulate(
+sim_dat = sampler.simulate(
     mode: str = "resample",
     subjects: Union[str, Sequence[int]] = "all",
     override_params: Optional[Dict[str, Any]] = None,
     n_samples: int = 1000,
-) -> List[Any]
+    to_df: bool = False,
+    sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+    combine_all: bool = False,
+    save_to_folder: Optional[str] = None,
+) -> Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
 ```
 
 Runs the model in simulate mode using the fitted parameters.
 
-#### Parameters
+#### Basic Usage: Simple List of Subject Datas
 
-* **`mode`** (`str`, default=`"resample"`):
-  Source of parameter draws:
-  * `"resample"`: Uses each subject's resampled posterior candidate draws (`sampler.samples`).
-  * `"hyper_params"`: Draws $N$ candidate parameters from the fitted population normal distribution.
-  * `"override_params"`: Uses an explicitly provided parameter dictionary.
-* **`subjects`** (`Union[str, Sequence[int]]`, default=`"all"`):
-  Either `"all"` or a list of integer subject indices to simulate.
-* **`override_params`** (`Optional[Dict[str, Any]]`, default=`None`):
-  Custom parameter dictionary to test specific counterfactuals.
-* **`n_samples`** (`int`, default=`1000`):
-  Number of parameter draws used when `mode="hyper_params"`.
-
-#### Return Value
-
-A list containing each subject's data as it was originally structured, with an added **`mean_choice_probability`** array (1D NumPy array across trials, averaged across parameter samples):
+By default, `sampler.simulate()` returns a `SimulatedDataList` (which behaves as a standard Python list containing each subject's simulated output data directly from your model):
 
 ```python
-sim_data = sampler.simulate()
+# 1. Simple list of subject datasets
+sim_dat = sampler.simulate()
 
-# Access mean choice probability for Subject 0:
-print(sim_data[0]["mean_choice_probability"])
+# Functions as a standard Python list:
+print(len(sim_dat))       # e.g., 96 subjects
+print(sim_dat[0])          # Subject 0's simulated data (DataFrame, dict, or list/array of sub-dfs)
+```
 
-# Original data keys remain preserved:
-print(sim_data[0]["choice"])
-print(sim_data[0]["trial"])
+#### Reconstructing into Combined DataFrames
+
+The object in each subject's data can be a single DataFrame/dict, or a list/array/dict containing $X$ sub-DataFrames (e.g. blocks, phases, or conditions). You can reconstruct them in 3 ways:
+
+1. **Construct the $X$ sub-dfs in each subject's data into $X$ combined DataFrames**:
+```python
+# Returns a dictionary: {0: df_0, 1: df_1, ...} (or by key names)
+dfs = sim_dat.to_dataframes()
+block0_df = dfs[0]
+block1_df = dfs[1]
+```
+
+2. **Construct just one specific sub-index to 1 DataFrame**:
+```python
+# Combine only sub-index 0 across all subjects:
+df_sub0 = sim_dat.to_dataframe(sub_index=0)
+
+# Or directly during simulate:
+df_sub0 = sampler.simulate(to_df=True, sub_index=0)
+```
+
+3. **Construct ALL sub-dfs across all subjects together into 1 combined DataFrame**:
+```python
+# Concatenates all sub-dfs across all subjects, with 'subject' and 'sub_index' columns:
+master_df = sim_dat.to_dataframe(combine_all=True)  # or sub_index="all"
+
+# Or directly during simulate:
+master_df = sampler.simulate(to_df=True, combine_all=True)
+```
+
+#### Saving DataFrames Directly to Folder
+
+You can save all reconstructed DataFrames directly to CSV in a folder, or save only one particular sub-index:
+
+```python
+# Save all X DataFrames to folder (e.g. simulated_data_sub_0.csv, simulated_data_sub_1.csv):
+sim_dat.save("simulated_output")
+
+# Or save only a specific sub-index (e.g. only sub_index 0):
+sim_dat.save("simulated_output", sub_index=0)
+
+# Or save all sub-dfs combined into 1 single file:
+sim_dat.save("simulated_output", combine_all=True)
+
+# Or save directly during simulate():
+sampler.simulate(save_to_folder="simulated_output", sub_index=0)
 ```
 
 ---

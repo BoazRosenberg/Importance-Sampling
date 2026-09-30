@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import inspect
+import os
+import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -20,6 +22,400 @@ from importance_sampling.utils import (
     load_model as _load_model_func,
     time_to_text,
 )
+
+
+def _to_single_df(item: Any) -> Any:
+    """Helper to convert a single sub-table or record collection to a pandas DataFrame."""
+    import pandas as pd
+    if isinstance(item, pd.DataFrame):
+        return item.copy()
+    if isinstance(item, dict):
+        try:
+            return pd.DataFrame(item)
+        except Exception:
+            return pd.DataFrame([item])
+    if isinstance(item, (list, tuple)):
+        try:
+            return pd.DataFrame(item)
+        except Exception:
+            return pd.DataFrame({"value": list(item)})
+    if hasattr(item, "to_dict"):
+        return pd.DataFrame(item.to_dict())
+    return pd.DataFrame({"value": [item]})
+
+
+def _extract_subject_sub_dfs(subj: Any) -> Dict[Union[int, str], Any]:
+    """Parse a single subject's simulated output into a dictionary of sub-DataFrames.
+
+    Supports:
+    - Single DataFrame
+    - List, tuple, or numpy array of sub-DataFrames / sub-tables: [df_0, df_1, ...]
+    - Dict mapping sub-indices to sub-DataFrames: {0: df_0, 1: df_1} or {'train': df_train, 'test': df_test}
+    - Dict of trial column arrays: {'choice': [...], 'reward': [...]}
+    - List of row record dicts: [{'trial': 1, 'choice': 0}, ...]
+    """
+    import pandas as pd
+
+    if subj is None:
+        return {}
+
+    # Case 1: Already a single DataFrame
+    if isinstance(subj, pd.DataFrame):
+        return {0: subj.copy()}
+
+    # Case 2: Dict
+    if isinstance(subj, dict):
+        # Check if dict values are themselves sub-tables/DataFrames or scalar column arrays
+        has_subtables = any(
+            isinstance(v, (pd.DataFrame, dict))
+            or (isinstance(v, (list, tuple)) and len(v) > 0 and isinstance(v[0], dict))
+            for v in subj.values()
+        )
+        if has_subtables:
+            return {k: _to_single_df(v) for k, v in subj.items()}
+        else:
+            return {0: _to_single_df(subj)}
+
+    # Case 3: List, tuple, or numpy array
+    if isinstance(subj, (list, tuple, np.ndarray)):
+        if len(subj) == 0:
+            return {}
+        first = subj[0]
+        if isinstance(first, pd.DataFrame):
+            # List of sub-DataFrames!
+            return {i: df.copy() for i, df in enumerate(subj)}
+        elif isinstance(first, dict):
+            # Check if elements are sub-tables (dict with arrays) or row records (dict with scalar values)
+            first_has_arrays = any(
+                isinstance(v, (list, tuple, np.ndarray, pd.Series)) and len(v) > 1
+                for v in first.values()
+            )
+            if first_has_arrays:
+                return {i: _to_single_df(sub_item) for i, sub_item in enumerate(subj)}
+            else:
+                return {0: pd.DataFrame(subj)}
+        elif isinstance(first, (list, tuple, np.ndarray)):
+            # List of sub-arrays/sub-tables
+            return {i: _to_single_df(sub_item) for i, sub_item in enumerate(subj)}
+        else:
+            return {0: pd.DataFrame({"simulated_value": list(subj)})}
+
+    return {0: pd.DataFrame({"simulated_value": [subj]})}
+
+
+def _reconstruct_dataframes(
+    sim_list: Sequence[Any],
+    sampler: Optional["Sampler"] = None,
+    sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+    combine_all: bool = False,
+    add_subject_col: bool = True,
+    add_group_col: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """Reconstruct a list of per-subject simulated data into combined pandas DataFrame(s).
+
+    Supports 3 primary workflows:
+    1. Construct ALL sub-dfs together into 1 combined DataFrame (combine_all=True or sub_index="all").
+    2. Construct X sub-dfs in each subject's data into X DataFrames across subjects (sub_index=None).
+    3. Construct 1 DataFrame from a specific sub_index across all subjects (e.g. sub_index=0 or sub_index="trials").
+    """
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError(
+            "pandas is required to reconstruct simulated data into DataFrames. "
+            "Install pandas via: pip install pandas"
+        ) from exc
+
+    # Backwards compatibility alias for target_kind / kinds / sub_indices
+    if sub_index is None:
+        sub_index = kwargs.get("target_kind", kwargs.get("kinds", kwargs.get("sub_indices", None)))
+
+    if not sim_list:
+        return pd.DataFrame()
+
+    def _get_subj_info(idx: int) -> Tuple[Any, Optional[str]]:
+        s_id: Any = idx
+        group_val: Optional[str] = None
+        if sampler is not None:
+            if hasattr(sampler, "subjects") and idx < len(sampler.subjects):
+                s_id = sampler.subjects[idx]
+            if hasattr(sampler, "subject_groups") and sampler.subject_groups:
+                first_param = next(iter(sampler.subject_groups))
+                s_groups = sampler.subject_groups[first_param]
+                if idx < len(s_groups):
+                    group_val = s_groups[idx]
+        return s_id, group_val
+
+    # Parse each subject into a dictionary of {sub_idx: df}
+    per_subject_dfs: List[Dict[Union[int, str], Any]] = [
+        _extract_subject_sub_dfs(item) for item in sim_list
+    ]
+
+    # Collect all unique sub-indices across subjects in insertion order
+    all_sub_indices: List[Union[int, str]] = []
+    for s_dfs in per_subject_dfs:
+        for k in s_dfs.keys():
+            if k not in all_sub_indices:
+                all_sub_indices.append(k)
+
+    if not all_sub_indices:
+        return pd.DataFrame()
+
+    # Determine if user wants all sub-dfs concatenated together to 1 single master DataFrame
+    is_combine_all = combine_all or (
+        isinstance(sub_index, str)
+        and sub_index.strip().lower() == "all"
+        and "all" not in all_sub_indices
+    )
+
+    if is_combine_all:
+        combined_rows = []
+        has_multiple_sub = len(all_sub_indices) > 1 or all_sub_indices != [0]
+        for s_idx, s_dfs in enumerate(per_subject_dfs):
+            s_id, g_val = _get_subj_info(s_idx)
+            for sub_k, df in s_dfs.items():
+                cur_df = df.copy()
+                if add_subject_col and "subject" not in cur_df.columns and "subject_id" not in cur_df.columns:
+                    cur_df.insert(0, "subject", s_id)
+                if has_multiple_sub and "sub_index" not in cur_df.columns:
+                    insert_pos = 1 if "subject" in cur_df.columns else 0
+                    cur_df.insert(insert_pos, "sub_index", sub_k)
+                if add_group_col and g_val is not None and "group" not in cur_df.columns:
+                    insert_pos = len(cur_df.columns)
+                    for col_name in ["sub_index", "subject"]:
+                        if col_name in cur_df.columns:
+                            insert_pos = cur_df.columns.get_loc(col_name) + 1
+                            break
+                    cur_df.insert(insert_pos, "group", g_val)
+                combined_rows.append(cur_df)
+        return pd.concat(combined_rows, ignore_index=True) if combined_rows else pd.DataFrame()
+
+    # If a specific single sub-index was requested (e.g. sub_index=0 or sub_index="phase1")
+    if sub_index is not None and not isinstance(sub_index, (list, tuple, set)):
+        target_k = sub_index
+        matched_k = target_k if target_k in all_sub_indices else None
+        if matched_k is None:
+            for k in all_sub_indices:
+                if str(k) == str(target_k):
+                    matched_k = k
+                    break
+        if matched_k is None:
+            raise KeyError(
+                f"Sub-index '{target_k}' was not found in subject simulated data. "
+                f"Available sub-indices: {all_sub_indices}."
+            )
+
+        sub_list = []
+        for s_idx, s_dfs in enumerate(per_subject_dfs):
+            if matched_k in s_dfs:
+                cur_df = s_dfs[matched_k].copy()
+                s_id, g_val = _get_subj_info(s_idx)
+                if add_subject_col and "subject" not in cur_df.columns and "subject_id" not in cur_df.columns:
+                    cur_df.insert(0, "subject", s_id)
+                if add_group_col and g_val is not None and "group" not in cur_df.columns:
+                    insert_pos = 1 if "subject" in cur_df.columns else 0
+                    cur_df.insert(insert_pos, "group", g_val)
+                sub_list.append(cur_df)
+        return pd.concat(sub_list, ignore_index=True) if sub_list else pd.DataFrame()
+
+    # Multiple sub-indices requested, or sub_index is None
+    target_keys = list(sub_index) if isinstance(sub_index, (list, tuple, set)) else all_sub_indices
+
+    result_dict: Dict[Union[int, str], Any] = {}
+    for k in target_keys:
+        matched_k = k if k in all_sub_indices else next((ak for ak in all_sub_indices if str(ak) == str(k)), None)
+        if matched_k is None:
+            continue
+        sub_list = []
+        for s_idx, s_dfs in enumerate(per_subject_dfs):
+            if matched_k in s_dfs:
+                cur_df = s_dfs[matched_k].copy()
+                s_id, g_val = _get_subj_info(s_idx)
+                if add_subject_col and "subject" not in cur_df.columns and "subject_id" not in cur_df.columns:
+                    cur_df.insert(0, "subject", s_id)
+                if add_group_col and g_val is not None and "group" not in cur_df.columns:
+                    insert_pos = 1 if "subject" in cur_df.columns else 0
+                    cur_df.insert(insert_pos, "group", g_val)
+                sub_list.append(cur_df)
+        result_dict[k] = pd.concat(sub_list, ignore_index=True) if sub_list else pd.DataFrame()
+
+    # If each subject only has 1 sub-df and no sub_index was explicitly specified, return the DataFrame directly
+    if len(result_dict) == 1 and sub_index is None and all_sub_indices == [0]:
+        return next(iter(result_dict.values()))
+
+    return result_dict
+
+
+def _save_reconstructed_dataframes(
+    sim_data: Sequence[Any],
+    folder: str,
+    sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+    combine_all: bool = False,
+    sampler: Optional["Sampler"] = None,
+    file_format: str = "csv",
+    prefix: str = "simulated_data",
+    **kwargs: Any,
+) -> Dict[Union[int, str], str]:
+    """Save reconstructed DataFrame(s) to a folder."""
+    os.makedirs(folder, exist_ok=True)
+
+    if sub_index is None:
+        sub_index = kwargs.get("kinds", kwargs.get("save_kinds", None))
+
+    reconstructed = _reconstruct_dataframes(
+        sim_data,
+        sampler=sampler,
+        sub_index=sub_index,
+        combine_all=combine_all,
+        **kwargs,
+    )
+
+    dfs_to_save: Dict[Union[int, str], Any] = {}
+    if hasattr(reconstructed, "to_csv"):
+        key = sub_index if (sub_index is not None and not isinstance(sub_index, (list, tuple, set))) else prefix
+        dfs_to_save[key] = reconstructed
+    elif isinstance(reconstructed, dict):
+        dfs_to_save = reconstructed
+    else:
+        dfs_to_save = {prefix: reconstructed}
+
+    saved_paths: Dict[Union[int, str], str] = {}
+    for sub_k, df in dfs_to_save.items():
+        if len(dfs_to_save) == 1 and sub_k == prefix:
+            fname = f"{prefix}.{file_format}"
+        elif isinstance(sub_k, int):
+            fname = f"{prefix}_sub_{sub_k}.{file_format}"
+        else:
+            fname = f"{sub_k}.{file_format}"
+
+        out_path = os.path.join(folder, fname)
+        if file_format == "csv":
+            df.to_csv(out_path, index=False)
+        elif file_format == "parquet":
+            df.to_parquet(out_path, index=False)
+        elif file_format == "feather":
+            df.to_feather(out_path)
+        else:
+            df.to_csv(out_path, index=False)
+
+        abs_p = os.path.abspath(out_path)
+        saved_paths[sub_k] = abs_p
+        print(f"Saved simulated data for sub_index '{sub_k}' ({len(df)} rows) to: {abs_p}")
+
+    return saved_paths
+
+
+class SimulatedDataList(list):
+    """A list of subject simulated data with helper methods for DataFrame reconstruction and export.
+
+    Because SimulatedDataList inherits directly from `list`, it functions as a standard Python
+    list (e.g. `len(sim_dat)`, `sim_dat[0]`, `for s in sim_dat:`).
+    """
+
+    def __init__(self, data_list: Sequence[Any], sampler: Optional["Sampler"] = None):
+        super().__init__(data_list)
+        self.sampler = sampler
+
+    def to_dataframe(
+        self,
+        sub_index: Optional[Union[int, str]] = None,
+        combine_all: bool = False,
+        add_subject_col: bool = True,
+        add_group_col: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Reconstruct subject simulated data into DataFrame(s).
+
+        Parameters
+        ----------
+        sub_index : Optional[Union[int, str]], default=None
+            - If an integer or string (e.g. 0, 1, or 'trials'): returns 1 combined DataFrame for that sub_index.
+            - If 'all': combines all sub-dfs across subjects into 1 master DataFrame (with 'sub_index' column).
+            - If None: returns 1 combined DataFrame (if 1 df per subject) or a dict of {sub_index: df} (if multiple sub-dfs).
+        combine_all : bool, default=False
+            If True, constructs all sub-dfs across all subjects together into 1 combined DataFrame.
+        add_subject_col : bool, default=True
+            Whether to add a 'subject' column identifying the subject ID.
+        add_group_col : bool, default=True
+            Whether to add a 'group' column if the sampler was configured with group differences.
+        """
+        return _reconstruct_dataframes(
+            self,
+            sampler=self.sampler,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            add_subject_col=add_subject_col,
+            add_group_col=add_group_col,
+            **kwargs,
+        )
+
+    def to_dataframes(
+        self,
+        sub_indices: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        add_subject_col: bool = True,
+        add_group_col: bool = True,
+        **kwargs: Any,
+    ) -> Dict[Union[int, str], Any]:
+        """Reconstruct the X sub-dfs in each subject's data into X combined DataFrames across all subjects.
+
+        Returns
+        -------
+        Dict[Union[int, str], pd.DataFrame]
+            Dictionary mapping each sub_index (e.g. 0, 1, ... or 'phase1', 'phase2') to its combined DataFrame.
+        """
+        res = _reconstruct_dataframes(
+            self,
+            sampler=self.sampler,
+            sub_index=sub_indices,
+            combine_all=False,
+            add_subject_col=add_subject_col,
+            add_group_col=add_group_col,
+            **kwargs,
+        )
+        if hasattr(res, "to_csv"):
+            return {0: res}
+        return res
+
+    def save(
+        self,
+        folder: str,
+        sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        combine_all: bool = False,
+        file_format: str = "csv",
+        prefix: str = "simulated_data",
+        **kwargs: Any,
+    ) -> Dict[Union[int, str], str]:
+        """Save reconstructed DataFrame(s) to a folder.
+
+        Parameters
+        ----------
+        folder : str
+            Destination directory (created if it does not exist).
+        sub_index : Optional[Union[int, str, Sequence[Union[int, str]]]], default=None
+            Specific sub-index (e.g. 0 or 'phase1') to save. If None, saves all sub-DataFrames.
+        combine_all : bool, default=False
+            If True, constructs all sub-dfs together into 1 combined file.
+        file_format : str, default='csv'
+            File format ('csv', 'parquet', or 'feather').
+        prefix : str, default='simulated_data'
+            Prefix for output filenames.
+
+        Returns
+        -------
+        Dict[Union[int, str], str]
+            Dictionary mapping saved sub-indices to their destination file paths.
+        """
+        return _save_reconstructed_dataframes(
+            self,
+            folder=folder,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            sampler=self.sampler,
+            file_format=file_format,
+            prefix=prefix,
+            **kwargs,
+        )
 
 
 class Sampler:
@@ -121,36 +517,94 @@ class Sampler:
         effective_group_diff = group_diff if group_diff is not None else params_with_group_diff
         self.group_diff: Dict[str, str] = {}
         if isinstance(effective_group_diff, dict):
-            self.group_diff = {
-                p: str(col) for p, col in effective_group_diff.items() if p in self.params
-            }
+            invalid_params = [p for p in effective_group_diff if p not in self.params]
+            if invalid_params:
+                raise KeyError(
+                    f"Parameters {invalid_params} in group_diff were not found in hyper_params. "
+                    f"Available parameters are: {self.params}."
+                )
+            self.group_diff = {p: str(col) for p, col in effective_group_diff.items()}
         elif isinstance(effective_group_diff, (list, tuple, set)):
-            self.group_diff = {
-                p: group_column for p in effective_group_diff if p in self.params
-            }
+            invalid_params = [p for p in effective_group_diff if p not in self.params]
+            if invalid_params:
+                raise KeyError(
+                    f"Parameters {invalid_params} in group_diff were not found in hyper_params. "
+                    f"Available parameters are: {self.params}."
+                )
+            self.group_diff = {p: group_column for p in effective_group_diff}
+        elif effective_group_diff is not None:
+            raise TypeError(
+                f"group_diff must be a dictionary mapping parameter names to column names "
+                f"(e.g. {{'alpha': 'condition'}}), or a list of parameter names (e.g. ['alpha']), "
+                f"got {type(effective_group_diff).__name__}."
+            )
 
         # Backwards compatibility alias
         self.params_with_group_diff = self.group_diff
 
-        def _extract_subject_group(subj_data: Any, col: str) -> str:
-            if hasattr(subj_data, "__getitem__"):
+        def _extract_subject_group(subj_idx: int, subj_data: Any, col: str, param_name: str) -> str:
+            val = None
+            found = False
+
+            # Check DataFrame / pandas Series
+            if hasattr(subj_data, "columns"):
+                if col in subj_data.columns:
+                    val = subj_data[col]
+                    found = True
+            elif hasattr(subj_data, "__contains__"):
+                try:
+                    if col in subj_data:
+                        val = subj_data[col]
+                        found = True
+                except Exception:
+                    pass
+
+            if not found and hasattr(subj_data, "__getitem__"):
                 try:
                     val = subj_data[col]
-                    if hasattr(val, "iloc"):
-                        val = val.iloc[0]
-                    elif isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
-                        val = val[0]
-                    return str(val)
+                    found = True
                 except (KeyError, IndexError, TypeError):
                     pass
-            if hasattr(subj_data, col):
+
+            if not found and hasattr(subj_data, col):
                 val = getattr(subj_data, col)
-                if hasattr(val, "iloc"):
-                    val = val.iloc[0]
-                elif isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
-                    val = val[0]
-                return str(val)
-            return "default"
+                found = True
+
+            if not found:
+                # Detect available columns / keys to guide the user
+                available: List[str] = []
+                if hasattr(subj_data, "columns"):
+                    available = list(subj_data.columns)
+                elif isinstance(subj_data, dict):
+                    available = list(subj_data.keys())
+                elif hasattr(subj_data, "__dict__"):
+                    available = list(subj_data.__dict__.keys())
+
+                avail_str = f" Available keys/columns: {available[:12]}" if available else ""
+                raise KeyError(
+                    f"Group column '{col}' specified for parameter '{param_name}' was not found in subject {subj_idx}'s data.{avail_str}\n"
+                    f"Please verify that your subject data contains the '{col}' column, or specify the correct column name "
+                    f"via group_diff={{'{param_name}': 'your_column_name'}} or group_column='your_column_name'."
+                )
+
+            # Unpack scalar value if it's a pandas Series, numpy array, list, etc.
+            if hasattr(val, "iloc"):
+                val = val.iloc[0]
+            elif isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
+                val = val[0]
+
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                raise ValueError(
+                    f"Subject {subj_idx} has a missing or NaN group label in column '{col}' for parameter '{param_name}'."
+                )
+
+            val_str = str(val).strip()
+            if not val_str or val_str.lower() in ("nan", "none", "null"):
+                raise ValueError(
+                    f"Subject {subj_idx} has an empty or invalid group label ('{val}') in column '{col}' for parameter '{param_name}'."
+                )
+
+            return val_str
 
         self.subject_groups: Dict[str, List[str]] = {}
         self.group_names: Dict[str, List[str]] = {}
@@ -161,9 +615,18 @@ class Sampler:
         self.group_diffs_list: Dict[str, List[Dict[str, float]]] = {}
 
         for p, col in self.group_diff.items():
-            s_groups = [_extract_subject_group(d, col) for d in self.data]
+            s_groups = [_extract_subject_group(s, d, col, p) for s, d in enumerate(self.data)]
             self.subject_groups[p] = s_groups
             unique_groups = sorted(list(set(s_groups)))
+
+            if len(unique_groups) < 2:
+                raise ValueError(
+                    f"Parameter '{p}' was configured for group differences on column '{col}', but only {len(unique_groups)} "
+                    f"distinct group was found across all {self.n_subjects} subjects: {unique_groups}.\n"
+                    f"Group difference estimation requires at least 2 distinct groups (e.g. ['control', 'patient']). "
+                    f"If all subjects belong to a single cohort, omit '{p}' from group_diff."
+                )
+
             self.group_names[p] = unique_groups
             self.ref_group[p] = unique_groups[0]
             init_mean = self.hyper_params[p]["mean"]
@@ -330,22 +793,32 @@ class Sampler:
     def adjust_hyper_priors(
         self,
         n_samples: int = 1000,
-        disable_progress: bool = False,
+        disable_progress: bool = True,
         leave: bool = False,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        position: int = 0,
     ) -> None:
         """Run one iteration of importance sampling across all subjects and update priors."""
         subject_samples: Dict[str, List[np.ndarray]] = {param: [] for param in self.params}
         mean_params: Dict[str, List[float]] = {param: [] for param in self.params}
         log_likelihoods: List[float] = []
 
-        subj_iter = range(self.n_subjects)
+        subj_indices = range(self.n_subjects)
+        pbar = None
         if not disable_progress:
-            subj_iter = tqdm(
-                subj_iter,
+            pbar = tqdm(
+                subj_indices,
                 desc="  Subjects",
                 unit="subj",
                 leave=leave,
+                file=sys.stdout,
+                dynamic_ncols=True,
+                position=position,
+                mininterval=0.25,
             )
+            subj_iter = pbar
+        else:
+            subj_iter = subj_indices
 
         for s in subj_iter:
             resample, log_mean_ll, s_mean = self.sample_resample(s, n_samples=n_samples)
@@ -353,6 +826,11 @@ class Sampler:
                 subject_samples[param].append(resample[param])
                 mean_params[param].append(s_mean[param])
             log_likelihoods.append(log_mean_ll)
+            if progress_callback is not None:
+                progress_callback(s + 1, self.n_subjects)
+
+        if pbar is not None and not leave:
+            pbar.close()
 
         # Pool particles across all subjects to update population distribution
         pooled_samples = {
@@ -475,8 +953,8 @@ class Sampler:
         epsilon: float = 0.01,
         n_mean: int = 10,
         stop_at_convergence: bool = True,
-        verbose: bool = True,
-        progress_bar: bool = True,
+        verbose: bool = False,
+        progress_bar: Union[bool, str] = True,
     ) -> "Sampler":
         """Run the iterative importance sampling estimation loop until convergence.
 
@@ -492,38 +970,65 @@ class Sampler:
             Window size for moving average convergence check.
         stop_at_convergence : bool, default=True
             Whether to stop early when convergence criterion is met.
-        verbose : bool, default=True
-            Whether to print detailed diagnostics and elapsed/predicted duration.
-        progress_bar : bool, default=True
-            Whether to display tqdm progress bars across iterations and within iterations (for subjects).
+        verbose : bool, default=False
+            Whether to print detailed diagnostics at each iteration.
+        progress_bar : Union[bool, str], default=True
+            Progress bar display mode:
+            - True (or 'single'): Displays ONE clean in-place progress bar tracking iterations
+              with live subject sub-progress in the postfix (no multi-line spam).
+            - 'nested': Displays both iteration and subject progress bars.
+            - 'subjects': Displays only subject progress bar for each iteration.
+            - False: Disables progress bars.
         """
         start = time.time()
-
         iter_range = range(n_iterations)
+
+        show_iter_bar = progress_bar in (True, "single", "nested")
+        show_subj_bar = progress_bar in ("nested", "subjects")
+
         iter_pbar = (
-            tqdm(iter_range, desc=f"Fitting {self.model_name}", unit="iter", leave=True)
-            if progress_bar
+            tqdm(
+                iter_range,
+                desc=f"Fitting {self.model_name}",
+                unit="iter",
+                leave=True,
+                file=sys.stdout,
+                dynamic_ncols=True,
+            )
+            if show_iter_bar
             else iter_range
         )
 
         for i in iter_pbar:
+            # Live subject sub-progress callback on the single progress bar
+            def _on_subj_progress(curr: int, total: int) -> None:
+                if show_iter_bar and not show_subj_bar and hasattr(iter_pbar, "set_postfix"):
+                    if curr == total or curr % max(1, total // 8) == 0:
+                        p_data: Dict[str, Any] = {"subj": f"{curr}/{total}"}
+                        if self.evidence:
+                            p_data["Evidence"] = f"{self.evidence[-1]:.2f}"
+                            p_data["BIC"] = f"{self.BIC[-1]:.2f}"
+                        iter_pbar.set_postfix(p_data, refresh=True)
+
             # Within-iteration progress across subjects
             self.adjust_hyper_priors(
                 n_samples=n_samples,
-                disable_progress=not progress_bar,
+                disable_progress=not show_subj_bar,
                 leave=False,
+                progress_callback=_on_subj_progress if (show_iter_bar and not show_subj_bar) else None,
+                position=1 if show_subj_bar and show_iter_bar else 0,
             )
             self.iterations += 1
 
-            # Update tqdm postfix with current diagnostics
-            if progress_bar and hasattr(iter_pbar, "set_postfix"):
+            # Update tqdm postfix with completed iteration diagnostics
+            if show_iter_bar and hasattr(iter_pbar, "set_postfix"):
                 postfix_data = {
                     "Evidence": f"{self.evidence[-1]:.2f}",
                     "BIC": f"{self.BIC[-1]:.2f}",
                 }
                 if len(self.evidence_change) > 0:
                     postfix_data["ΔEv"] = f"{self.evidence_change[-1]:+.2f}"
-                iter_pbar.set_postfix(postfix_data)
+                iter_pbar.set_postfix(postfix_data, refresh=True)
 
             # Convergence check over window of n_mean iterations
             change = 0.0
@@ -534,15 +1039,14 @@ class Sampler:
                     converged = True
 
             if converged:
-                if verbose:
-                    msg = (
-                        f"\n✨ Converged after {i + 1} iterations.\n"
-                        f"Total evidence: {round(self.evidence[-1], 4)}"
-                    )
-                    if progress_bar:
-                        tqdm.write(msg)
-                    else:
-                        print(msg)
+                msg = (
+                    f"✨ Converged after {i + 1} iterations. "
+                    f"Evidence: {self.evidence[-1]:.4f}, BIC: {self.BIC[-1]:.2f}"
+                )
+                if show_iter_bar:
+                    tqdm.write(msg, file=sys.stdout)
+                else:
+                    print(msg)
                 self.total_fit_time += time.time() - start
                 break
 
@@ -550,31 +1054,30 @@ class Sampler:
             predicted_duration = (elapsed / (i + 1)) * (n_iterations - i - 1)
 
             if verbose:
-                prefix = f"\n {self.model_name}\n Iteration: {i + 1} of {n_iterations}"
-                change_n_mean = f", over last {n_mean} iterations: {round(change, 4)}" if i >= n_mean else ""
-                desc = (
-                    f"\nCurrent time:    {time.strftime('%H:%M:%S', time.localtime())}\n"
-                    f"Elapsed:         {time_to_text(elapsed)}\n"
-                    f"Time remaining:  {time_to_text(predicted_duration)}\n"
-                    f"Evidence:        {round(self.evidence[-1], 4):>10} "
-                    f"(change: {round(self.evidence_change[-1], 4):>7}"
-                    f"{change_n_mean})\n"
+                msg = (
+                    f"Iter {i + 1}/{n_iterations} | "
+                    f"Evidence: {self.evidence[-1]:.4f} (ΔEv: {self.evidence_change[-1]:+.4f}) | "
+                    f"BIC: {self.BIC[-1]:.2f} | "
+                    f"Elapsed: {time_to_text(elapsed)} | Remaining: {time_to_text(predicted_duration)}"
                 )
-                if progress_bar:
-                    tqdm.write(prefix + desc)
+                if show_iter_bar:
+                    tqdm.write(msg, file=sys.stdout)
                 else:
-                    print(prefix + desc)
+                    print(msg)
         else:
             if verbose:
                 msg = (
-                    f"\nCompleted all {n_iterations} iterations without convergence.\n"
-                    f"Final evidence: {round(self.evidence[-1], 4)}"
+                    f"Completed all {n_iterations} iterations. "
+                    f"Evidence: {self.evidence[-1]:.4f}, BIC: {self.BIC[-1]:.2f}"
                 )
-                if progress_bar:
-                    tqdm.write(msg)
+                if show_iter_bar:
+                    tqdm.write(msg, file=sys.stdout)
                 else:
                     print(msg)
             self.total_fit_time += time.time() - start
+
+        if show_iter_bar and hasattr(iter_pbar, "close"):
+            iter_pbar.close()
 
         return self
 
@@ -588,16 +1091,60 @@ class Sampler:
         subjects: Union[str, Sequence[int]] = "all",
         override_params: Optional[Dict[str, Any]] = None,
         n_samples: int = 1000,
-    ) -> List[Any]:
-        """Simulate choices using fitted parameters, returning subject data with mean choice probability.
+        to_df: bool = False,
+        sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        combine_all: bool = False,
+        save_to_folder: Optional[str] = None,
+        save_dir: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Union[SimulatedDataList, Any]:
+        """Simulate data for subjects using fitted parameters.
+
+        By default, returns a `SimulatedDataList` (which is a standard Python list of each subject's
+        simulated data as returned by your model). You can inspect, modify, or put it together however you like.
+
+        Flexible Reconstruction & Export Options:
+        - `to_df=True`: Reconstructs the per-subject datasets into combined DataFrame(s).
+        - `sub_index=0` (or `sub_index="trials"`): Reconstructs/saves ONLY a specific sub-index to 1 DataFrame.
+        - `combine_all=True` (or `sub_index="all"`): Constructs all sub-dfs across all subjects together into 1 combined DataFrame.
+        - `save_to_folder="path"`: Automatically saves reconstructed DataFrame(s) to CSV in that directory.
+
+        Parameters
+        ----------
+        mode : str, default='resample'
+            Parameter sampling source: 'resample' (from posterior samples), 'hyper_params' (from population priors),
+            'override_params' (custom parameters), or 'mean_params' (subject posterior means).
+        subjects : Union[str, Sequence[int]], default='all'
+            Subjects to simulate.
+        override_params : Optional[Dict[str, Any]], default=None
+            Parameters to use if mode='override_params'.
+        n_samples : int, default=1000
+            Number of draws when mode='hyper_params'.
+        to_df : bool, default=False
+            If True, returns the reconstructed DataFrame(s) instead of the list of subject datas.
+        sub_index : Optional[Union[int, str, Sequence[Union[int, str]]]], default=None
+            Specific sub-index (e.g. 0, 1, or 'phase1') to reconstruct or save.
+            Use 'all' to construct all sub-dfs together into 1 combined DataFrame.
+        combine_all : bool, default=False
+            If True, constructs all sub-dfs across all subjects together into 1 master DataFrame.
+        save_to_folder : Optional[str], default=None
+            If provided, saves the reconstructed DataFrame(s) directly to this directory.
+        save_dir : Optional[str], default=None
+            Alias for save_to_folder.
 
         Returns
         -------
-        List[Dict[str, Any]]
-            The list of subject data as it was, with an added 'mean_choice_probability' array for each subject.
+        Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
+            A SimulatedDataList of per-subject data (which supports .to_dataframe() and .save()),
+            or the reconstructed DataFrame(s) if `to_df=True`.
         """
+        # Backwards compatibility for save_kinds / kinds
+        if sub_index is None:
+            sub_index = kwargs.get("save_kinds", kwargs.get("kinds", kwargs.get("sub_indices", None)))
+
         sim_data = []
         target_subjects = self.subjects if subjects == "all" else list(subjects)
+        target_folder = save_to_folder or save_dir
 
         for s in target_subjects:
             subj_data = self.data[s]
@@ -617,31 +1164,66 @@ class Sampler:
                 raw_p = override_params
                 transformed_p = override_params
             else:
-                raw_p = {k: np.array([self.mean_params[k][s]]) for k in self.params}
+                if self.mean_params is not None and s < len(next(iter(self.mean_params.values()), [])):
+                    raw_p = {k: np.array([self.mean_params[k][s]]) for k in self.params}
+                else:
+                    raw_p = {k: np.array([self.hyper_params[k]["mean"]]) for k in self.params}
                 transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
 
-            # Invoke model in simulate mode to get choice probabilities across trials
-            p_choices = self._invoke_model(subj_data, transformed_p, mode="simulate", raw_samples=raw_p)
+            # Invoke model in simulate mode
+            sim_res = self._invoke_model(subj_data, transformed_p, mode="simulate", raw_samples=raw_p)
+            if sim_res is None:
+                sim_res = subj_data
 
-            p_arr = np.asarray(p_choices, dtype=np.float64)
-            if p_arr.ndim > 1:
-                # Shape (n_trials, n_samples) -> average across candidate parameter draws
-                mean_p = np.mean(p_arr, axis=-1)
-            else:
-                mean_p = p_arr
+            sim_data.append(sim_res)
 
-            # Return original subject data dictionary/object with mean_choice_probability
-            if hasattr(subj_data, "copy"):
-                subj_sim = subj_data.copy()
-            elif isinstance(subj_data, dict):
-                subj_sim = dict(subj_data)
-            else:
-                subj_sim = {"data": subj_data}
+        result = SimulatedDataList(sim_data, sampler=self)
 
-            subj_sim["mean_choice_probability"] = mean_p
-            sim_data.append(subj_sim)
+        # Save to folder if requested
+        if target_folder:
+            result.save(folder=target_folder, sub_index=sub_index, combine_all=combine_all)
 
-        return sim_data
+        # Return reconstructed DataFrame(s) if requested
+        if to_df:
+            return result.to_dataframe(sub_index=sub_index, combine_all=combine_all)
+
+        return result
+
+    def to_dataframes(
+        self,
+        sim_data: Sequence[Any],
+        sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        combine_all: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Reconstruct subject simulated data into 1 combined DataFrame or X DataFrames for each sub-index."""
+        return _reconstruct_dataframes(
+            sim_data,
+            sampler=self,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            **kwargs,
+        )
+
+    def save_simulated_data(
+        self,
+        sim_data: Sequence[Any],
+        folder: str,
+        sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        combine_all: bool = False,
+        file_format: str = "csv",
+        **kwargs: Any,
+    ) -> Dict[Union[int, str], str]:
+        """Save reconstructed simulated DataFrames directly to a folder."""
+        return _save_reconstructed_dataframes(
+            sim_data,
+            folder=folder,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            sampler=self,
+            file_format=file_format,
+            **kwargs,
+        )
 
     # -------------------------------------------------------------------------
     # Persistence & Summary

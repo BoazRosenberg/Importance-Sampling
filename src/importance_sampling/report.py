@@ -22,29 +22,71 @@ if TYPE_CHECKING:
     from importance_sampling.sampler import Sampler
 
 
+def _is_notebook() -> bool:
+    """Detect whether execution is occurring inside an interactive notebook environment."""
+    try:
+        from IPython import get_ipython
+        ip = get_ipython()
+        if ip is None:
+            return False
+        shell = ip.__class__.__name__
+        # Terminal IPython shell cannot display rich interactive HTML
+        if "Terminal" in shell:
+            return False
+        # Jupyter Notebook, JupyterLab, VS Code, or Google Colab
+        if "ZMQ" in shell or "Colab" in shell or hasattr(ip, "kernel"):
+            return True
+        return False
+    except Exception:
+        return False
+
+
 class ReportDashboard:
     """A self-contained, interactive HTML dashboard for model diagnostics."""
 
-    def __init__(self, html_content: str, figure: Any = None):
+    def __init__(self, html_content: str, filename: Optional[str] = None, figure: Any = None):
         self.html_content = html_content
+        self.filename = filename
         self.figure = figure
 
     def _repr_html_(self) -> str:
         """Render rich interactive HTML automatically in Jupyter and Google Colab."""
-        return self.html_content
+        import html
+        escaped = html.escape(self.html_content, quote=True)
+        return (
+            f'<iframe srcdoc="{escaped}" '
+            f'style="width: 100%; height: 860px; border: 1px solid #d1d9e0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" '
+            f'frameborder="0"></iframe>'
+        )
+
+    def __repr__(self) -> str:
+        dest = f" (saved to '{self.filename}')" if self.filename else ""
+        return f"<ReportDashboard{dest}>"
 
     def save(self, filename: str) -> str:
         """Save the dashboard to an HTML file."""
-        with open(filename, "w", encoding="utf-8") as f:
+        abs_path = os.path.abspath(filename)
+        dir_name = os.path.dirname(abs_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        with open(abs_path, "w", encoding="utf-8") as f:
             f.write(self.html_content)
-        return os.path.abspath(filename)
+        self.filename = abs_path
+        return abs_path
 
     def show(self) -> None:
         """Open the dashboard in the default web browser."""
-        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".html", encoding="utf-8") as f:
-            f.write(self.html_content)
-            temp_path = f.name
-        webbrowser.open(f"file://{temp_path}")
+        if self.filename and os.path.exists(self.filename):
+            target_path = self.filename
+        else:
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".html", encoding="utf-8") as f:
+                f.write(self.html_content)
+                target_path = f.name
+            self.filename = target_path
+
+        url = f"file://{os.path.abspath(target_path)}"
+        print(f"Opening report in web browser: {url}")
+        webbrowser.open(url)
 
 
 def create_report(
@@ -783,18 +825,26 @@ def create_report(
 </html>
 """
 
-    dashboard = ReportDashboard(html_content, figure=fig_fit)
+    dashboard = ReportDashboard(html_content, filename=filename, figure=fig_fit)
 
     if filename:
         dashboard.save(filename)
 
     if show:
-        # If in a Jupyter/Colab notebook environment, display via IPython HTML
-        try:
-            from IPython.display import HTML, display
-            display(HTML(html_content))
-        except (ImportError, Exception):
-            # Otherwise open cleanly in browser
+        if _is_notebook():
+            try:
+                import html
+                from IPython.display import HTML, display
+                escaped = html.escape(html_content, quote=True)
+                iframe_html = (
+                    f'<iframe srcdoc="{escaped}" '
+                    f'style="width: 100%; height: 860px; border: 1px solid #d1d9e0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" '
+                    f'frameborder="0"></iframe>'
+                )
+                display(HTML(iframe_html))
+            except Exception:
+                dashboard.show()
+        else:
             dashboard.show()
 
     return dashboard
@@ -1189,16 +1239,26 @@ def compare_models(
 </html>
 """
 
-    dashboard = ReportDashboard(comp_html, figure=fig_ev)
+    dashboard = ReportDashboard(comp_html, filename=filename, figure=fig_ev)
 
     if filename:
         dashboard.save(filename)
 
     if show:
-        try:
-            from IPython.display import HTML, display
-            display(HTML(comp_html))
-        except (ImportError, Exception):
+        if _is_notebook():
+            try:
+                import html
+                from IPython.display import HTML, display
+                escaped = html.escape(comp_html, quote=True)
+                iframe_html = (
+                    f'<iframe srcdoc="{escaped}" '
+                    f'style="width: 100%; height: 860px; border: 1px solid #d1d9e0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" '
+                    f'frameborder="0"></iframe>'
+                )
+                display(HTML(iframe_html))
+            except Exception:
+                dashboard.show()
+        else:
             dashboard.show()
 
     return dashboard
