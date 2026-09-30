@@ -568,10 +568,11 @@ def create_report(
                 t_tar = t_func(m_tar)
                 t_diff = t_tar - t_ref
 
+                col_display = ".".join(str(c) for c in col_name) if isinstance(col_name, (list, tuple)) else str(col_name)
                 group_rows_html += f"""
                 <tr style="border-bottom: 1px solid #eaeef2;">
                     <td style="padding: 10px 14px; font-weight: 700; font-family: monospace;">{p}</td>
-                    <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{col_name}</td>
+                    <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{col_display}</td>
                     <td style="padding: 10px 14px; font-family: monospace;">{ref_g}: <strong>{t_ref:.4f}</strong> (latent: {m_ref:.4f})</td>
                     <td style="padding: 10px 14px; font-family: monospace;">{target_g}: <strong>{t_tar:.4f}</strong> (latent: {m_tar:.4f})</td>
                     <td style="padding: 10px 14px; font-family: monospace; font-weight: 700; color: {'#0969da' if t_diff > 0 else '#cf222e'};">

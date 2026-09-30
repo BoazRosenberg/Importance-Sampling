@@ -202,17 +202,21 @@ Sampler(
   Model category code (e.g. `"B"` for Behavioral).
 * **`random_state`** (`Optional[Union[int, np.random.Generator]]`, default=`None`):
   Seed integer or NumPy Generator for reproducible sampling.
-* **`group_diff`** (`Optional[Union[Dict[str, str], Sequence[str]]]`, default=`None`):
+* **`group_diff`** (`Optional[Union[Dict[str, Any], Sequence[str]]]`, default=`None`):
   Enables estimation of between-group differences for specified parameters.
-  * Either a dictionary mapping parameter names to the group column name in subject datasets (e.g. `{"alpha": "condition", "beta": "diagnosis"}`).
+  * Either a dictionary mapping parameter names to the group column or path in subject datasets (e.g. `{"alpha": "condition"}` or `{"alpha": ("subject_data", "group")}`).
   * Or a list/sequence of parameter names (e.g. `["alpha"]`), using `group_column`.
+  * **Nested Sub-DataFrame Support**: If each subject's data consists of multiple sub-dataframes (e.g. `{"subject_data": df_info, "task": df_trials}` or `[df_info, df_trials]`):
+    * **Tuple path**: `group_column=("subject_data", "group")` or `group_diff={"alpha": ("subject_data", "group")}`.
+    * **Dot notation**: `group_column="subject_data.group"` or `group_column="0.group"`.
+    * **Automatic deep search**: If you just pass `group_column="group"`, the sampler automatically searches inside all sub-dataframes and sub-dicts to find the column.
   * **Statistical estimation**: For each parameter with $N$ groups, fits $2 + (N - 1)$ hyperparameters:
     1. Grand population mean ($\mu$)
     2. Pooled within-group standard deviation ($\sigma$)
     3. Between-group differences ($\Delta_{k} = \mu_{g_k} - \mu_{g_0}$) for each non-reference group.
   * **BIC Penalization**: Accurately adds $(N - 1)$ degrees of freedom per group-difference parameter to the BIC penalty term.
-* **`group_column`** (`str`, default=`"group"`):
-  Default column or attribute name in subject datasets indicating group membership when `group_diff` is passed as a list.
+* **`group_column`** (`Union[str, Tuple, List]`, default=`"group"`):
+  Default column name or nested path in subject datasets indicating group membership when `group_diff` is passed as a list (e.g., `"group"`, `"subject_data.group"`, or `("subject_data", "group")`).
 
 ---
 

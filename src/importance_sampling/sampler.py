@@ -515,7 +515,7 @@ class Sampler:
 
         # Configure parameters with group differences
         effective_group_diff = group_diff if group_diff is not None else params_with_group_diff
-        self.group_diff: Dict[str, str] = {}
+        self.group_diff: Dict[str, Any] = {}
         if isinstance(effective_group_diff, dict):
             invalid_params = [p for p in effective_group_diff if p not in self.params]
             if invalid_params:
@@ -523,7 +523,7 @@ class Sampler:
                     f"Parameters {invalid_params} in group_diff were not found in hyper_params. "
                     f"Available parameters are: {self.params}."
                 )
-            self.group_diff = {p: str(col) for p, col in effective_group_diff.items()}
+            self.group_diff = {p: col for p, col in effective_group_diff.items()}
         elif isinstance(effective_group_diff, (list, tuple, set)):
             invalid_params = [p for p in effective_group_diff if p not in self.params]
             if invalid_params:
@@ -534,74 +534,165 @@ class Sampler:
             self.group_diff = {p: group_column for p in effective_group_diff}
         elif effective_group_diff is not None:
             raise TypeError(
-                f"group_diff must be a dictionary mapping parameter names to column names "
-                f"(e.g. {{'alpha': 'condition'}}), or a list of parameter names (e.g. ['alpha']), "
+                f"group_diff must be a dictionary mapping parameter names to column names or paths "
+                f"(e.g. {{'alpha': 'condition'}} or {{'alpha': ('subject_data', 'group')}}), "
+                f"or a list of parameter names (e.g. ['alpha']), "
                 f"got {type(effective_group_diff).__name__}."
             )
 
         # Backwards compatibility alias
         self.params_with_group_diff = self.group_diff
 
-        def _extract_subject_group(subj_idx: int, subj_data: Any, col: str, param_name: str) -> str:
-            val = None
-            found = False
+        def _extract_subject_group(subj_idx: int, subj_data: Any, col_spec: Any, param_name: str) -> str:
+            # Helper to unpack scalar value from Series, array, or list
+            def _unpack(v: Any) -> Any:
+                if hasattr(v, "iloc"):
+                    return v.iloc[0] if len(v) > 0 else None
+                if isinstance(v, (list, tuple, np.ndarray)):
+                    return v[0] if len(v) > 0 else None
+                return v
 
-            # Check DataFrame / pandas Series
-            if hasattr(subj_data, "columns"):
-                if col in subj_data.columns:
-                    val = subj_data[col]
-                    found = True
-            elif hasattr(subj_data, "__contains__"):
-                try:
-                    if col in subj_data:
-                        val = subj_data[col]
+            # 1. Parse path tokens (supports tuple/list, dot-separated strings, or direct keys)
+            if isinstance(col_spec, (list, tuple)):
+                path_tokens = list(col_spec)
+            elif isinstance(col_spec, str):
+                has_direct = False
+                if hasattr(subj_data, "columns") and col_spec in subj_data.columns:
+                    has_direct = True
+                elif isinstance(subj_data, dict) and col_spec in subj_data:
+                    has_direct = True
+                elif hasattr(subj_data, col_spec):
+                    has_direct = True
+
+                if not has_direct and ("." in col_spec or "/" in col_spec):
+                    delim = "." if "." in col_spec else "/"
+                    path_tokens = [tok.strip() for tok in col_spec.split(delim) if tok.strip()]
+                else:
+                    path_tokens = [col_spec]
+            else:
+                path_tokens = [col_spec]
+
+            # 2. Try explicit path traversal
+            def _traverse(node: Any, tokens: List[Any]) -> Tuple[bool, Any]:
+                curr = node
+                for tok in tokens:
+                    if curr is None:
+                        return False, None
+
+                    is_int = isinstance(tok, int) or (isinstance(tok, str) and tok.isdigit())
+
+                    # Sequence / ndarray indexing
+                    if is_int and isinstance(curr, (list, tuple, np.ndarray)):
+                        idx = int(tok)
+                        if 0 <= idx < len(curr):
+                            curr = curr[idx]
+                            continue
+                        return False, None
+
+                    # DataFrame column or positional iloc
+                    if hasattr(curr, "columns"):
+                        if tok in curr.columns:
+                            curr = curr[tok]
+                            continue
+                        if is_int and int(tok) < len(curr.columns):
+                            curr = curr.iloc[:, int(tok)]
+                            continue
+
+                    # Dict key
+                    if isinstance(curr, dict):
+                        if tok in curr:
+                            curr = curr[tok]
+                            continue
+                        if is_int and int(tok) in curr:
+                            curr = curr[int(tok)]
+                            continue
+
+                    # General __getitem__
+                    if hasattr(curr, "__getitem__"):
+                        try:
+                            curr = curr[tok]
+                            continue
+                        except Exception:
+                            pass
+
+                    # Object attribute
+                    if isinstance(tok, str) and hasattr(curr, tok):
+                        curr = getattr(curr, tok)
+                        continue
+
+                    return False, None
+
+                return True, curr
+
+            found, raw_val = _traverse(subj_data, path_tokens)
+
+            # 3. If explicit path didn't find it, and we have a single column name, search sub-dataframes/dicts
+            if not found and len(path_tokens) == 1:
+                target_col = path_tokens[0]
+                queue = [(subj_data, 0)]
+                visited = set()
+                while queue:
+                    curr_obj, depth = queue.pop(0)
+                    if depth > 4:
+                        continue
+                    obj_id = id(curr_obj)
+                    if obj_id in visited:
+                        continue
+                    visited.add(obj_id)
+
+                    if hasattr(curr_obj, "columns") and target_col in curr_obj.columns:
+                        raw_val = curr_obj[target_col]
                         found = True
-                except Exception:
-                    pass
+                        break
+                    if isinstance(curr_obj, dict) and target_col in curr_obj:
+                        raw_val = curr_obj[target_col]
+                        found = True
+                        break
+                    if hasattr(curr_obj, str(target_col)) and not callable(getattr(curr_obj, str(target_col))):
+                        raw_val = getattr(curr_obj, str(target_col))
+                        found = True
+                        break
 
-            if not found and hasattr(subj_data, "__getitem__"):
-                try:
-                    val = subj_data[col]
-                    found = True
-                except (KeyError, IndexError, TypeError):
-                    pass
-
-            if not found and hasattr(subj_data, col):
-                val = getattr(subj_data, col)
-                found = True
+                    # Enqueue sub-structures
+                    if isinstance(curr_obj, dict):
+                        for child in curr_obj.values():
+                            if isinstance(child, (dict, list, tuple, np.ndarray)) or hasattr(child, "columns"):
+                                queue.append((child, depth + 1))
+                    elif isinstance(curr_obj, (list, tuple)):
+                        for child in curr_obj:
+                            if isinstance(child, (dict, list, tuple, np.ndarray)) or hasattr(child, "columns"):
+                                queue.append((child, depth + 1))
 
             if not found:
-                # Detect available columns / keys to guide the user
-                available: List[str] = []
+                available_preview: List[str] = []
                 if hasattr(subj_data, "columns"):
-                    available = list(subj_data.columns)
+                    available_preview = list(subj_data.columns)
                 elif isinstance(subj_data, dict):
-                    available = list(subj_data.keys())
-                elif hasattr(subj_data, "__dict__"):
-                    available = list(subj_data.__dict__.keys())
+                    available_preview = list(subj_data.keys())
+                elif isinstance(subj_data, (list, tuple)):
+                    available_preview = [f"index {i} ({type(item).__name__})" for i, item in enumerate(subj_data[:5])]
 
-                avail_str = f" Available keys/columns: {available[:12]}" if available else ""
+                avail_str = f" Available keys/sub-structures: {available_preview}" if available_preview else ""
+                spec_display = ".".join(str(x) for x in col_spec) if isinstance(col_spec, (list, tuple)) else str(col_spec)
                 raise KeyError(
-                    f"Group column '{col}' specified for parameter '{param_name}' was not found in subject {subj_idx}'s data.{avail_str}\n"
-                    f"Please verify that your subject data contains the '{col}' column, or specify the correct column name "
-                    f"via group_diff={{'{param_name}': 'your_column_name'}} or group_column='your_column_name'."
+                    f"Group column '{spec_display}' specified for parameter '{param_name}' was not found in subject {subj_idx}'s data.{avail_str}\n"
+                    f"Tips for multi-dataframe subject data:\n"
+                    f"  - If inside a named sub-DataFrame/dict: use group_column=('subject_data', 'group') or 'subject_data.group'\n"
+                    f"  - If inside a list of sub-DataFrames: use group_column=(0, 'group') or '0.group'\n"
+                    f"  - Or configure per-parameter: group_diff={{'{param_name}': ('subject_data', 'group')}}"
                 )
 
-            # Unpack scalar value if it's a pandas Series, numpy array, list, etc.
-            if hasattr(val, "iloc"):
-                val = val.iloc[0]
-            elif isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
-                val = val[0]
+            val = _unpack(raw_val)
 
             if val is None or (isinstance(val, float) and np.isnan(val)):
                 raise ValueError(
-                    f"Subject {subj_idx} has a missing or NaN group label in column '{col}' for parameter '{param_name}'."
+                    f"Subject {subj_idx} has a missing or NaN group label in '{col_spec}' for parameter '{param_name}'."
                 )
 
             val_str = str(val).strip()
             if not val_str or val_str.lower() in ("nan", "none", "null"):
                 raise ValueError(
-                    f"Subject {subj_idx} has an empty or invalid group label ('{val}') in column '{col}' for parameter '{param_name}'."
+                    f"Subject {subj_idx} has an empty or invalid group label ('{val}') in '{col_spec}' for parameter '{param_name}'."
                 )
 
             return val_str
