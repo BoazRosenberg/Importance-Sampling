@@ -351,7 +351,7 @@ sampler.create_report(
 ) -> Any
 ```
 
-Generates an interactive diagnostic report widget powered by Plotly. Also available as a standalone function `create_report(sampler, ...)`.
+Generates an interactive multi-page diagnostic report widget powered by Plotly. Also available as a standalone function `create_report(sampler, ...)`. When exported to HTML (`filename="model_report.html"`), it renders as an interactive 3-page tabbed web application.
 
 #### Parameters
 
@@ -365,26 +365,21 @@ Generates an interactive diagnostic report widget powered by Plotly. Also availa
 * **`renderer`** (`Optional[str]`, default=`None`):
   Plotly renderer option (e.g., `'browser'`, `'notebook'`, `'colab'`).
 
-#### Report Layout & Visualizations Included
+#### Multi-Page Single Model Report Layout
 
-1. **Model Fit & Convergence**:
+1. **Page 1: General Fit & Convergence**:
    * **Total Evidence (Log Likelihood) & BIC**: Dual-axis trajectory showing total model evidence climbing and BIC minimizing across iterations.
-   * **Subject-Level Evidence Spaghetti Plot**: Trajectories of log marginal likelihood for each individual subject, alongside the population mean.
-2. **Model Parameters Table**:
-   * Compact table listing all model parameters by their raw dictionary keys (e.g. `alpha`, `beta`, `decay`, etc.), with final fitted means, standard deviations, and ±1 SD credible bounds.
-3. **Hyperparameter Evolution Grid (3 Plots per Row)**:
-   * Arranged in a responsive 3-column grid, adding a separate subplot for each selected parameter.
-   * **Solid line** represents the population mean trajectory across iterations $0, 1, \dots, N$.
-   * **Translucent shaded band** represents $\pm 1 \text{ SD}$ around the mean.
-   * Hover tooltips display the exact iteration, mean, $+1 \text{ SD}$, and $-1 \text{ SD}$.
-   * Scalable to models with 10+ parameters without vertical clutter.
-4. **Individual Subject Posterior Means (Scatter Plot per Parameter)**:
-   * Arranged in a separate plot for each selected parameter.
-   * **Y-axis**: Subject index / number ($0, 1, \dots, N_{\text{subjects}} - 1$).
-   * **X-axis**: The subject's posterior mean value for that parameter.
-   * Each dot represents an individual subject, enabling immediate inspection of between-subject spread without displaying raw numbers.
-5. **Multinormal Correlation / Covariance Matrix Heatmap**:
-   * Located at the end of the report: an interactive correlation heatmap showing latent space parameter correlations ($r \in [-1.0, 1.0]$) with a diverging color scale, cell annotations, and hover values. Useful when fitting models with `multinormal="full"` or paired correlations.
+   * **Subject-Level Evidence Spaghetti Plot**: Trajectories of log marginal likelihood for each individual subject, alongside the population mean trajectory.
+   * **Convergence Summary Metrics**: Total evidence, BIC, iteration count, duration, and convergence criteria status.
+2. **Page 2: Model Parameters & Subject Distributions**:
+   * **Model Parameters Summary Table**: Raw parameter names, fitted population means, standard deviations, and ±1 SD credible intervals.
+   * **Hyperparameter Evolution Grid (3 Plots per Row)**: Mean trajectories and translucent shaded $\pm 1 \text{ SD}$ bands across iterations for each parameter.
+   * **Individual Subject Posterior Means (Scatter Plot per Parameter)**: Subject-by-subject posterior draws plotted along the X-axis for each parameter to visualize between-subject heterogeneity.
+   * **Latent Correlation Matrix Heatmap**: Full bivariate correlation heatmap ($r \in [-1.0, 1.0]$) between parameters in latent normal space.
+3. **Page 3: Model Code & Run Metadata**:
+   * **Run Metadata Cards**: Execution timestamps (start time, finish time, formatted duration), number of iterations, subject counts, particle counts, and system environment (Python & OS versions).
+   * **Model Source Code Box**: Embedded, syntax-highlighted Python function code used to fit the model, complete with one-click copy.
+   * **Companion JSON Metadata Viewer**: Full JSON dump of the model metadata snapshot saved alongside the model pickle.
 
 ---
 
@@ -397,22 +392,27 @@ compare_models(
     samplers: Union[Sequence[Sampler], Dict[str, Sampler]],
     filename: Optional[str] = None,
     show: bool = True,
-    compare_params: Optional[Sequence[str]] = None,
+    compare_params: Optional[Sequence[str]] = None,  # Defaults to ALL parameters across models
+    transformed: bool = True,
     renderer: Optional[str] = None,
 ) -> Any
 ```
 
-Generates an interactive comparative report widget to evaluate two or more fitted models against each other.
+Generates an interactive comparative report widget to evaluate two or more fitted models against each other. By default (`compare_params=None`), it automatically extracts and compares **all** parameters across the candidate models.
 
-#### Features Included:
-1. **Evidence & BIC Evolution**:
-   * Dual subplots showing total evidence (log likelihood) and BIC curves across iterations for all models simultaneously.
-2. **Final Fit Comparison Bar Plot & Table**:
-   * Side-by-side grouped bar plot of final evidence and BIC.
-   * Comprehensive model ranking table with $k$ (parameters), Final Evidence, Final BIC, and $\Delta\text{BIC}$ relative to the winning model.
-3. **Parameter Comparison Across Models**:
-   * Pass `compare_params=["lr", "inv_temp"]` to inspect shared parameter estimates (population mean $\pm 1 \text{ SD}$ error bars and subject distributions) across the models.
-   * Can also be called directly via `compare_parameters([m1, m2], params=["lr"])` to keep the primary report focused.
+#### Multi-Page Comparison Layout
+
+1. **Page 1: Likelihood, BICs & Participant Selection**:
+   * **Total Evidence & BIC Trajectories**: Overlay of evidence and BIC evolution across iterations for all models.
+   * **Final Model Ranking Table**: Ranks models by BIC (lowest is best), reporting $k$ parameters, Final Evidence, Final BIC, and $\Delta\text{BIC}$ relative to the winning model.
+   * **Percentage of Participants Best Explained**: Reports the percentage and exact subject counts where each model achieved the highest individual log-marginal likelihood $\ln p(D_s \mid M)$.
+2. **Page 2: Parameter Inclusion Matrix & Collapsible Code**:
+   * **Parameter Overview Matrix Table**: Parameters listed on the Y-axis, compared models on the X-axis. Cells show whether each parameter is included (with fitted population mean and SD) or excluded (`—`), clearly distinguishing shared parameters from model-specific parameters.
+   * **Collapsible Model Functions Code**: Tabbed viewer displaying the exact Python implementation function for each model, with a collapse/expand toggle to preserve vertical space and a one-click copy button.
+3. **Page 3: Parameter Evolution Comparison Plots**:
+   * **Shared Parameters Plotted Together**: When a parameter repeats across multiple models (e.g. `alpha` or `beta`), all models containing it are displayed on the **same subplot** with distinct color-coded curves and $\pm 1 \text{ SD}$ uncertainty ribbons for direct visual comparison.
+   * **Unique Parameters**: If a parameter is specific to a single model, it is plotted individually with a badge indicating its unique status.
+   * **Responsive Subplot Grid**: Arranged in 3 columns with tooltips and final estimated values.
 
 ---
 
@@ -422,6 +422,7 @@ Fitted `Sampler` objects can be serialized to disk and restored across sessions:
 
 ```python
 # Save model to disk (method on Sampler instance)
+# Saves both a model pickle file and a companion .json metadata file
 saved_path = sampler.save_model(filename="my_fitted_model", directory="saved_models")
 
 # Load a saved model (imported separately as a standalone function)
@@ -430,7 +431,13 @@ from importance_sampling import load_model
 loaded_sampler = load_model(filename="my_fitted_model", directory="saved_models")
 print(loaded_sampler.evidence[-1])
 print(loaded_sampler.mean_params)
+print(loaded_sampler.metadata)  # Access stored timestamp, duration, iterations, and model code
 ```
+
+When saved, `sampler.save_model()` stores:
+* The serialized `Sampler` instance pickle (`.pkl`).
+* A companion JSON metadata file (`_metadata.json`) containing fit duration, start/end timestamps, number of iterations, convergence criteria, parameter specifications, and the model function source code.
+* An internal `sampler.metadata` dictionary for programmatic inspection.
 
 ---
 

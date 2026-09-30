@@ -13,6 +13,18 @@ import {
   SlidersHorizontal,
   Scale,
   Award,
+  FileCode,
+  FileText,
+  Clock,
+  Download,
+  ChevronRight,
+  ChevronLeft,
+  Printer,
+  Calendar,
+  Timer,
+  Cpu,
+  Sparkles,
+  Database,
 } from 'lucide-react';
 
 const PARAM_KEYS = ['alpha', 'beta', 'decay', 'bias', 'noise', 'pers'] as const;
@@ -102,6 +114,7 @@ const mockCorMatrix: Record<ParamKey, Record<ParamKey, number>> = {
 // MULTI-MODEL DATA FOR COMPARISON
 interface ModelComparisonEntry {
   name: string;
+  description: string;
   color: string;
   k: number;
   params: string[];
@@ -109,6 +122,11 @@ interface ModelComparisonEntry {
   bicHistory: number[];
   finalEvidence: number;
   finalBIC: number;
+  bestExplainedCount: number;
+  bestExplainedPct: number;
+  code: string;
+  paramFitted: Record<string, { mean: number; sd: number }>;
+  paramEvolutions: Record<string, number[]>;
   alphaMean?: number;
   alphaSD?: number;
   betaMean?: number;
@@ -120,6 +138,7 @@ interface ModelComparisonEntry {
 const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
   QLearn_Pers: {
     name: 'QLearn_Pers',
+    description: 'Q-learning with choice perseveration and unchosen value decay',
     color: '#0969da',
     k: 3,
     params: ['alpha', 'beta', 'pers'],
@@ -127,6 +146,32 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     bicHistory: [434.1, 385.7, 354.3, 332.9, 317.7, 307.5, 300.7, 296.3, 294.1, 292.9, 292.3, 291.9],
     finalEvidence: -141.3,
     finalBIC: 291.9,
+    bestExplainedCount: 6,
+    bestExplainedPct: 60.0,
+    paramFitted: {
+      alpha: { mean: 0.396, sd: 0.072 },
+      beta: { mean: 3.05, sd: 0.74 },
+      pers: { mean: 0.340, sd: 0.32 },
+    },
+    paramEvolutions: {
+      alpha: [0.500, 0.462, 0.435, 0.418, 0.410, 0.405, 0.402, 0.400, 0.398, 0.397, 0.397, 0.396],
+      beta:  [1.31, 1.84, 2.21, 2.48, 2.67, 2.81, 2.91, 2.97, 3.01, 3.03, 3.04, 3.05],
+      pers:  [0.00, 0.10, 0.18, 0.24, 0.28, 0.31, 0.32, 0.33, 0.34, 0.34, 0.34, 0.34],
+    },
+    code: `def q_learning_with_perseveration(subj_data, parameters, mode="log_likelihood"):
+    """Q-learning model with choice perseveration and value decay."""
+    choices, rewards = subj_data["choice"], subj_data["reward"]
+    alpha, beta, pers = parameters["alpha"], parameters["beta"], parameters["pers"]
+    Q = np.zeros(2)
+    last_c, log_lik = -1, 0.0
+    for c, r in zip(choices, rewards):
+        v = beta * Q + np.array([pers if last_c == 0 else 0.0, pers if last_c == 1 else 0.0])
+        p1 = 1.0 / (1.0 + np.exp(v[0] - v[1]))
+        p_c = p1 if c == 1 else (1.0 - p1)
+        log_lik += np.log(max(1e-12, p_c))
+        Q[c] += alpha * (r - Q[c])
+        last_c = c
+    return log_lik`,
     alphaMean: 0.396,
     alphaSD: 0.072,
     betaMean: 3.05,
@@ -136,6 +181,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
   },
   Standard_QLearn: {
     name: 'Standard_QLearn',
+    description: 'Classic Rescorla-Wagner Q-learning with softmax choice',
     color: '#1a7f37',
     k: 2,
     params: ['alpha', 'beta'],
@@ -143,6 +189,28 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     bicHistory: [442.0, 396.8, 370.2, 355.0, 342.4, 335.0, 330.2, 327.6, 326.4, 325.8, 325.4, 325.0],
     finalEvidence: -159.5,
     finalBIC: 325.0,
+    bestExplainedCount: 1,
+    bestExplainedPct: 10.0,
+    paramFitted: {
+      alpha: { mean: 0.435, sd: 0.095 },
+      beta: { mean: 2.62, sd: 0.88 },
+    },
+    paramEvolutions: {
+      alpha: [0.500, 0.482, 0.468, 0.455, 0.448, 0.442, 0.439, 0.437, 0.436, 0.435, 0.435, 0.435],
+      beta:  [1.00, 1.45, 1.80, 2.05, 2.25, 2.40, 2.50, 2.56, 2.60, 2.61, 2.62, 2.62],
+    },
+    code: `def standard_q_learning(subj_data, parameters, mode="log_likelihood"):
+    """Classic 2-parameter Rescorla-Wagner / Q-learning model."""
+    choices, rewards = subj_data["choice"], subj_data["reward"]
+    alpha, beta = parameters["alpha"], parameters["beta"]
+    Q = np.zeros(2)
+    log_lik = 0.0
+    for c, r in zip(choices, rewards):
+        p1 = 1.0 / (1.0 + np.exp(beta * (Q[0] - Q[1])))
+        p_c = p1 if c == 1 else (1.0 - p1)
+        log_lik += np.log(max(1e-12, p_c))
+        Q[c] += alpha * (r - Q[c])
+    return log_lik`,
     alphaMean: 0.435,
     alphaSD: 0.095,
     betaMean: 2.62,
@@ -152,6 +220,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
   },
   Dual_Alpha_QLearn: {
     name: 'Dual_Alpha_QLearn',
+    description: 'Asymmetric Q-learning with separate positive & negative learning rates',
     color: '#8250df',
     k: 3,
     params: ['alpha_pos', 'alpha_neg', 'beta'],
@@ -159,6 +228,32 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     bicHistory: [439.7, 391.3, 363.9, 347.5, 336.3, 328.9, 323.7, 320.3, 318.9, 317.7, 317.3, 316.9],
     finalEvidence: -153.8,
     finalBIC: 316.9,
+    bestExplainedCount: 2,
+    bestExplainedPct: 20.0,
+    paramFitted: {
+      alpha_pos: { mean: 0.408, sd: 0.082 },
+      alpha_neg: { mean: 0.358, sd: 0.091 },
+      beta: { mean: 2.88, sd: 0.81 },
+    },
+    paramEvolutions: {
+      alpha_pos: [0.500, 0.472, 0.451, 0.435, 0.424, 0.418, 0.414, 0.411, 0.409, 0.408, 0.408, 0.408],
+      alpha_neg: [0.500, 0.455, 0.421, 0.398, 0.382, 0.372, 0.366, 0.362, 0.360, 0.359, 0.358, 0.358],
+      beta:      [1.20, 1.65, 2.02, 2.30, 2.51, 2.66, 2.76, 2.82, 2.86, 2.87, 2.88, 2.88],
+    },
+    code: `def dual_learning_rate_q_learning(subj_data, parameters, mode="log_likelihood"):
+    """Q-learning with separate positive (reward) and negative (loss) learning rates."""
+    choices, rewards = subj_data["choice"], subj_data["reward"]
+    a_pos, a_neg, beta = parameters["alpha_pos"], parameters["alpha_neg"], parameters["beta"]
+    Q = np.zeros(2)
+    log_lik = 0.0
+    for c, r in zip(choices, rewards):
+        p1 = 1.0 / (1.0 + np.exp(beta * (Q[0] - Q[1])))
+        p_c = p1 if c == 1 else (1.0 - p1)
+        log_lik += np.log(max(1e-12, p_c))
+        pe = r - Q[c]
+        alpha = a_pos if pe >= 0 else a_neg
+        Q[c] += alpha * pe
+    return log_lik`,
     alphaMean: 0.412,
     alphaSD: 0.082,
     betaMean: 2.88,
@@ -168,6 +263,7 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
   },
   Random_Baseline: {
     name: 'Random_Baseline',
+    description: '1-parameter baseline with constant response bias',
     color: '#cf222e',
     k: 1,
     params: ['bias'],
@@ -175,14 +271,127 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     bicHistory: [467.0, 453.2, 447.0, 444.0, 442.6, 442.0, 441.8, 441.6, 441.6, 441.6, 441.6, 441.6],
     finalEvidence: -219.3,
     finalBIC: 441.6,
+    bestExplainedCount: 1,
+    bestExplainedPct: 10.0,
+    paramFitted: {
+      bias: { mean: 0.160, sd: 0.28 },
+    },
+    paramEvolutions: {
+      bias: [0.00, 0.05, 0.09, 0.12, 0.14, 0.15, 0.15, 0.16, 0.16, 0.16, 0.16, 0.16],
+    },
+    code: `def biased_random_choice_baseline(subj_data, parameters, mode="log_likelihood"):
+    """1-parameter baseline model with constant lateral response bias."""
+    choices = subj_data["choice"]
+    bias = parameters["bias"]
+    p1 = 1.0 / (1.0 + np.exp(-bias))
+    log_lik = 0.0
+    for c in choices:
+        p_c = p1 if c == 1 else (1.0 - p1)
+        log_lik += np.log(max(1e-12, p_c))
+    return log_lik`,
   },
+};
+
+const mockModelCode = `def q_learning_with_perseveration(subj_data, parameters, mode="log_likelihood"):
+    """
+    Q-learning model with perseveration and unchosen option value decay.
+
+    Parameters:
+        alpha: Learning rate [0, 1]
+        beta:  Inverse temperature (choice sensitivity) [0, inf)
+        decay: Value decay per unchosen option [0, 1]
+        bias:  Side bias preference [-inf, inf]
+        noise: Random exploration noise [0, 1]
+        pers:  Choice perseveration kernel [-inf, inf]
+    """
+    choices = subj_data["choice"]
+    rewards = subj_data["reward"]
+    n_trials = len(choices)
+
+    alpha = parameters["alpha"]
+    beta  = parameters["beta"]
+    decay = parameters["decay"]
+    bias  = parameters["bias"]
+    noise = parameters["noise"]
+    pers  = parameters["pers"]
+
+    # Initialize Q-values for 2 choice options
+    Q = np.zeros(2)
+    last_choice = -1
+    log_lik = 0.0
+
+    for t in range(n_trials):
+        c = choices[t]
+        r = rewards[t]
+
+        # Action values with perseverance bonus
+        v0 = beta * Q[0] + bias + (pers if last_choice == 0 else 0.0)
+        v1 = beta * Q[1] + (pers if last_choice == 1 else 0.0)
+
+        # Softmax choice probability with random exploration noise
+        p1 = (1.0 - noise) / (1.0 + np.exp(v0 - v1)) + 0.5 * noise
+        p_c = p1 if c == 1 else (1.0 - p1)
+        log_lik += np.log(max(1e-12, p_c))
+
+        # Value update & decay of unchosen action
+        Q[c] += alpha * (r - Q[c])
+        unchosen = 1 - c
+        Q[unchosen] *= (1.0 - decay)
+        last_choice = c
+
+    return log_lik`;
+
+const mockMetadata = {
+  model_name: "QLearn_Pers",
+  description: "Q-learning with perseveration and unchosen decay",
+  type: "B",
+  timestamp: "2026-09-30 07:22:15",
+  created_at: "2026-09-30 07:18:42",
+  last_fit_at: "2026-09-30 07:22:15",
+  saved_at: "2026-09-30 07:22:15",
+  total_fit_time_seconds: 14.82,
+  total_fit_time_formatted: "14.82s",
+  iterations: 12,
+  n_subjects: 10,
+  n_params: 6,
+  params: ["alpha", "beta", "decay", "bias", "noise", "pers"],
+  param_summary: {
+    alpha: { latent_mean: -0.422, latent_sd: 0.312, transformed_mean: 0.396 },
+    beta: { latent_mean: 1.115, latent_sd: 0.245, transformed_mean: 3.05 },
+    decay: { latent_mean: -1.046, latent_sd: 0.380, transformed_mean: 0.26 },
+    bias: { latent_mean: 0.160, latent_sd: 0.280, transformed_mean: 0.16 },
+    noise: { latent_mean: -1.734, latent_sd: 0.410, transformed_mean: 0.15 },
+    pers: { latent_mean: 0.340, latent_sd: 0.320, transformed_mean: 0.34 }
+  },
+  multinormal: "full",
+  group_diff: {
+    alpha: {
+      column: "condition",
+      groups: ["control", "patient"],
+      reference_group: "control",
+      group_means: { control: 0.352, patient: 0.440 },
+      group_diffs: { "patient - control": 0.088 }
+    }
+  },
+  n_choices: 2,
+  final_evidence: -141.30,
+  final_bic: 291.90,
+  model_code: mockModelCode,
+  system_info: {
+    python_version: "3.11.8",
+    platform: "Linux-6.6.0-x86_64"
+  }
 };
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'report' | 'compare' | 'docs'>('compare');
   const [copied, setCopied] = useState(false);
 
-  // Single Model Report States
+  // Single Model Report States (Multi-Page Diagnostic Report)
+  const [activeReportPage, setActiveReportPage] = useState<'fit' | 'params' | 'metadata'>('fit');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
+
   const [selectedParams, setSelectedParams] = useState<ParamKey[]>(['alpha', 'beta', 'decay']);
   const [subjectSelectedParams, setSubjectSelectedParams] = useState<ParamKey[]>([
     'alpha',
@@ -199,8 +408,16 @@ export default function App() {
     'Dual_Alpha_QLearn',
     'Random_Baseline',
   ]);
-  const [comparisonSubTab, setComparisonSubTab] = useState<'fit' | 'params'>('fit');
-  const [compareParamKey, setCompareParamKey] = useState<'alpha' | 'beta'>('alpha');
+  const [comparisonSubTab, setComparisonSubTab] = useState<'fit' | 'matrix' | 'evolution'>('fit');
+  const [selectedCodeModel, setSelectedCodeModel] = useState<string>('QLearn_Pers');
+  const [isCodeCollapsed, setIsCodeCollapsed] = useState<boolean>(false);
+  const [copiedCompareCode, setCopiedCompareCode] = useState<boolean>(false);
+
+  const handleCopyCompareCode = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCompareCode(true);
+    setTimeout(() => setCopiedCompareCode(false), 2000);
+  };
 
   const installCmd = 'pip install git+https://github.com/BoazRosenberg/Importance-Sampling.git';
 
@@ -208,6 +425,30 @@ export default function App() {
     navigator.clipboard.writeText(installCmd);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(mockModelCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleCopyJson = () => {
+    navigator.clipboard.writeText(JSON.stringify(mockMetadata, null, 2));
+    setCopiedJson(true);
+    setTimeout(() => setCopiedJson(false), 2000);
+  };
+
+  const handleDownloadMetadata = () => {
+    const blob = new Blob([JSON.stringify(mockMetadata, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'QLearn_Pers_metadata.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const toggleParamInEvolution = (param: ParamKey) => {
@@ -421,34 +662,80 @@ export default function App() {
                 })}
               </div>
 
-              {/* Sub-tab view toggle (Overview Fit & BIC vs Dedicated Parameter Comparison) */}
-              <div className="flex bg-[#f6f8fa] p-1 border border-[#d1d9e0] rounded-lg text-xs font-medium self-start sm:self-auto">
+              {/* Sub-tab view toggle (3 Pages for Multi-Model Comparison) */}
+              <div className="flex bg-[#f6f8fa] p-1 border border-[#d1d9e0] rounded-lg text-xs font-medium self-start sm:self-auto gap-1">
                 <button
                   onClick={() => setComparisonSubTab('fit')}
-                  className={`px-3 py-1 rounded cursor-pointer transition-colors ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-pointer transition-all ${
                     comparisonSubTab === 'fit'
                       ? 'bg-white text-[#0969da] font-semibold shadow-2xs'
                       : 'text-[#59636e] hover:text-[#1f2328]'
                   }`}
                 >
-                  Fit &amp; BIC Comparison
+                  <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    comparisonSubTab === 'fit' ? 'bg-[#0969da] text-white' : 'bg-[#eaeef2] text-[#59636e]'
+                  }`}>
+                    1
+                  </span>
+                  <Activity className="w-3.5 h-3.5" />
+                  <span>Fit &amp; BICs</span>
                 </button>
+
                 <button
-                  onClick={() => setComparisonSubTab('params')}
-                  className={`px-3 py-1 rounded cursor-pointer transition-colors ${
-                    comparisonSubTab === 'params'
-                      ? 'bg-white text-[#0969da] font-semibold shadow-2xs'
+                  onClick={() => setComparisonSubTab('matrix')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-pointer transition-all ${
+                    comparisonSubTab === 'matrix'
+                      ? 'bg-white text-[#1a7f37] font-semibold shadow-2xs'
                       : 'text-[#59636e] hover:text-[#1f2328]'
                   }`}
                 >
-                  Parameter Comparison
+                  <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    comparisonSubTab === 'matrix' ? 'bg-[#1a7f37] text-white' : 'bg-[#eaeef2] text-[#59636e]'
+                  }`}>
+                    2
+                  </span>
+                  <Grid className="w-3.5 h-3.5" />
+                  <span>Parameter Matrix &amp; Code</span>
+                </button>
+
+                <button
+                  onClick={() => setComparisonSubTab('evolution')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-pointer transition-all ${
+                    comparisonSubTab === 'evolution'
+                      ? 'bg-white text-[#8250df] font-semibold shadow-2xs'
+                      : 'text-[#59636e] hover:text-[#1f2328]'
+                  }`}
+                >
+                  <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    comparisonSubTab === 'evolution' ? 'bg-[#8250df] text-white' : 'bg-[#eaeef2] text-[#59636e]'
+                  }`}>
+                    3
+                  </span>
+                  <TrendingUp className="w-3.5 h-3.5" />
+                  <span>Parameter Evolution</span>
                 </button>
               </div>
             </div>
 
-            {/* SUB-VIEW A: FIT & BIC EVOLUTION + FINAL COMPARISON TABLE & BAR PLOT */}
+            {/* ============================================================== */}
+            {/* PAGE 1: FIT & BICS + PARTICIPANT BEST-EXPLAINED BREAKDOWN      */}
+            {/* ============================================================== */}
             {comparisonSubTab === 'fit' && (
               <div className="space-y-6">
+                <div className="bg-white border-l-4 border-l-[#0969da] border border-[#d1d9e0] rounded-xl p-4 shadow-2xs flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-[#1f2328]">
+                      Page 1: Likelihood, BIC Trajectories &amp; Subject-Level Selection
+                    </h2>
+                    <p className="text-xs text-[#59636e]">
+                      Total population evidence trajectories, BIC minimization curves, model ranking table, and % of participants best explained by each model.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#0969da]/10 text-[#0969da]">
+                    Page 1 of 3
+                  </span>
+                </div>
+
                 {/* 1. EVOLUTION PLOTS: EVIDENCE & BIC */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Total Evidence Evolution */}
@@ -560,47 +847,16 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 2. FINAL COMPARISON BAR PLOT & SUMMARY TABLE */}
+                {/* 2. FINAL COMPARISON RANKING TABLE & PARTICIPANTS BEST EXPLAINED */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Final Comparison Bar Plot */}
-                  <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
-                    <div className="pb-2 border-b border-[#d1d9e0]">
-                      <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
-                        <BarChart3 className="w-4 h-4 text-[#0969da]" />
-                        Final Model Evidence &amp; BIC Comparison Bar Plot
-                      </h3>
-                      <p className="text-xs text-[#59636e]">Side-by-side score comparison at convergence.</p>
-                    </div>
-
-                    <div className="h-56 flex items-end gap-6 justify-center px-4 pt-6 pb-2 border border-[#eaeef2] rounded-lg bg-white">
-                      {activeModelList.map((m) => {
-                        const bicHeight = Math.max(20, ((m.finalBIC - 250) / 220) * 160);
-                        return (
-                          <div key={m.name} className="flex flex-col items-center gap-1.5">
-                            <span className="text-[11px] font-mono font-bold text-[#1f2328]">
-                              {m.finalBIC.toFixed(1)}
-                            </span>
-                            <div
-                              style={{ height: `${bicHeight}px`, backgroundColor: m.color }}
-                              className="w-12 rounded-t transition-all hover:opacity-90 shadow-2xs"
-                            />
-                            <span className="text-[11px] font-mono text-[#59636e] truncate max-w-[85px] text-center">
-                              {m.name}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Comparative Summary Table */}
+                  {/* Comparative Summary Table with Best-Explained Column */}
                   <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
                     <div className="pb-2 border-b border-[#d1d9e0]">
                       <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
                         <Award className="w-4 h-4 text-[#1a7f37]" />
-                        Final Model Ranking &amp; Comparison Table
+                        Final Model Ranking &amp; Diagnostic Statistics
                       </h3>
-                      <p className="text-xs text-[#59636e]">Sorted by BIC rank (lowest BIC is superior).</p>
+                      <p className="text-xs text-[#59636e]">Sorted by BIC rank (lowest BIC is superior; ΔBIC &gt; 10 is decisive).</p>
                     </div>
 
                     <div className="overflow-x-auto border border-[#eaeef2] rounded-lg">
@@ -609,10 +865,12 @@ export default function App() {
                           <tr>
                             <th className="py-2.5 px-3 font-semibold">Rank</th>
                             <th className="py-2.5 px-3 font-semibold">Model</th>
+                            <th className="py-2.5 px-3 font-semibold">Description</th>
                             <th className="py-2.5 px-3 font-semibold">k</th>
                             <th className="py-2.5 px-3 font-semibold">Evidence</th>
                             <th className="py-2.5 px-3 font-semibold">BIC</th>
                             <th className="py-2.5 px-3 font-semibold">ΔBIC</th>
+                            <th className="py-2.5 px-3 font-semibold">Best-Explained %</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#eaeef2] font-mono">
@@ -637,15 +895,21 @@ export default function App() {
                                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: m.color }} />
                                   <span>{m.name}</span>
                                 </td>
+                                <td className="py-2.5 px-3 text-[#59636e] font-sans text-xs max-w-[200px] truncate" title={m.description}>
+                                  {m.description}
+                                </td>
                                 <td className="py-2.5 px-3 text-[#59636e]">{m.k}</td>
                                 <td className="py-2.5 px-3 text-[#0969da]">{m.finalEvidence.toFixed(1)}</td>
                                 <td className="py-2.5 px-3 text-[#1f2328]">{m.finalBIC.toFixed(1)}</td>
                                 <td className="py-2.5 px-3">
                                   {isWinner ? (
-                                    <span className="text-[#1a7f37] font-bold">0.0</span>
+                                    <span className="text-[#1a7f37] font-bold">0.0 (Best)</span>
                                   ) : (
                                     <span className="text-[#cf222e]">+{deltaBic.toFixed(1)}</span>
                                   )}
+                                </td>
+                                <td className="py-2.5 px-3 font-bold text-[#8250df]">
+                                  {m.bestExplainedPct.toFixed(1)}% <span className="font-normal text-[10px] text-[#59636e]">({m.bestExplainedCount}/10)</span>
                                 </td>
                               </tr>
                             );
@@ -658,104 +922,435 @@ export default function App() {
                       * ΔBIC &gt; 10 represents very strong evidence against the higher-BIC model (Kass &amp; Raftery, 1995).
                     </div>
                   </div>
+
+                  {/* Percentage of Participants Best Explained Horizontal Breakdown */}
+                  <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
+                    <div className="pb-2 border-b border-[#d1d9e0]">
+                      <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
+                        <BarChart3 className="w-4 h-4 text-[#8250df]" />
+                        Percentage of Participants Best Explained
+                      </h3>
+                      <p className="text-xs text-[#59636e]">
+                        Proportion of individual subjects where each model achieved the highest log-marginal likelihood.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4 pt-2">
+                      {sortedModels.map((m) => (
+                        <div key={m.name} className="space-y-1">
+                          <div className="flex justify-between items-center text-xs font-mono">
+                            <span className="font-bold text-[#1f2328] flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.color }} />
+                              {m.name}
+                            </span>
+                            <span className="font-bold text-[#1f2328]">
+                              {m.bestExplainedPct.toFixed(1)}% <span className="font-normal text-[#59636e]">({m.bestExplainedCount}/10 subjects)</span>
+                            </span>
+                          </div>
+                          <div className="h-3 w-full bg-[#eaeef2] rounded-full overflow-hidden">
+                            <div
+                              style={{ width: `${m.bestExplainedPct}%`, backgroundColor: m.color }}
+                              className="h-full rounded-full transition-all duration-500"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="p-3 bg-[#f6f8fa] border border-[#d1d9e0] rounded-lg text-xs text-[#59636e] mt-4 font-mono">
+                      <span>Dominant Model: </span>
+                      <strong className="text-[#1a7f37]">{sortedModels[0].name}</strong> explains <strong>{sortedModels[0].bestExplainedPct}%</strong> of participants while minimizing overall population BIC.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Page 1 Footer Navigation */}
+                <div className="flex justify-between items-center pt-2">
+                  <div className="text-xs text-[#59636e]">
+                    Viewing Page 1 of 3: Fit &amp; BICs
+                  </div>
+                  <button
+                    onClick={() => setComparisonSubTab('matrix')}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#0969da] hover:bg-[#f6f8fa] text-xs font-semibold text-[#0969da] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <span>Next Page: Parameter Matrix &amp; Code</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             )}
 
-            {/* SUB-VIEW B: SEPARATE DEDICATED PARAMETER COMPARISON PAGE */}
-            {comparisonSubTab === 'params' && (
-              <div className="bg-white border border-[#d1d9e0] rounded-xl p-6 shadow-2xs space-y-5">
-                <div className="pb-3 border-b border-[#d1d9e0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* ============================================================== */}
+            {/* PAGE 2: PARAMETER INCLUSION MATRIX & COLLAPSIBLE CODE          */}
+            {/* ============================================================== */}
+            {comparisonSubTab === 'matrix' && (
+              <div className="space-y-6">
+                <div className="bg-white border-l-4 border-l-[#1a7f37] border border-[#d1d9e0] rounded-xl p-4 shadow-2xs flex items-center justify-between">
                   <div>
-                    <h2 className="text-base font-bold text-[#1f2328] flex items-center gap-2">
-                      <SlidersHorizontal className="w-5 h-5 text-[#8250df]" />
-                      Parameter Comparison Across Models
+                    <h2 className="text-sm font-bold text-[#1f2328]">
+                      Page 2: Parameter Inclusion Matrix &amp; Model Function Source Codes
                     </h2>
                     <p className="text-xs text-[#59636e]">
-                      Compare fitted population mean (±1 SD) and subject-level distributions for parameters shared across models.
+                      Overview table of which parameters are included in which models, with collapsible source code inspection for each model.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#1a7f37]/10 text-[#1a7f37]">
+                    Page 2 of 3
+                  </span>
+                </div>
+
+                {/* MODEL DESCRIPTIONS SUMMARY CARDS */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {activeModelList.map((m) => (
+                    <div key={m.name} className="p-3.5 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1.5">
+                      <div className="flex items-center justify-between font-mono font-bold text-xs text-[#1f2328]">
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.color }} />
+                          {m.name}
+                        </span>
+                        <span className="text-[10px] text-[#59636e] font-normal">k = {m.k}</span>
+                      </div>
+                      <p className="text-[11px] text-[#59636e] leading-snug">
+                        {m.description}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* PARAMETER INCLUSION OVERVIEW TABLE (Y-axis = Parameters, X-axis = Models) */}
+                <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-4">
+                  <div className="pb-2 border-b border-[#d1d9e0]">
+                    <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
+                      <Grid className="w-4 h-4 text-[#0969da]" />
+                      Parameter Inclusion Overview Matrix
+                    </h3>
+                    <p className="text-xs text-[#59636e]">
+                      Parameters on Y-axis, Models on X-axis. Filled squares represent parameters included in each model without text clutter.
                     </p>
                   </div>
 
-                  {/* Parameter selector button group */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-[#59636e] font-mono mr-1">Parameter:</span>
-                    {(['alpha', 'beta'] as const).map((pk) => (
-                      <button
-                        key={pk}
-                        onClick={() => setCompareParamKey(pk)}
-                        className={`px-3 py-1 rounded text-xs font-mono font-semibold cursor-pointer transition-colors ${
-                          compareParamKey === pk
-                            ? 'bg-[#8250df] text-white shadow-2xs'
-                            : 'bg-[#f6f8fa] text-[#59636e] border border-[#d1d9e0] hover:bg-white'
-                        }`}
-                      >
-                        {pk}
-                      </button>
-                    ))}
+                  <div className="overflow-x-auto border border-[#eaeef2] rounded-lg">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#f6f8fa] text-[#59636e] border-b border-[#eaeef2] font-mono">
+                        <tr>
+                          <th className="py-2.5 px-4 font-semibold w-48">Parameter (Y-Axis)</th>
+                          {activeModelList.map((m) => (
+                            <th key={m.name} className="py-2.5 px-4 font-semibold text-center">
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="flex items-center gap-1.5" style={{ color: m.color }}>
+                                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: m.color }} />
+                                  {m.name}
+                                </span>
+                                <span className="text-[10px] font-normal text-[#59636e] max-w-[130px] truncate" title={m.description}>
+                                  {m.description}
+                                </span>
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#eaeef2]">
+                        {Array.from(new Set(activeModelList.flatMap((m) => m.params))).map((pKey) => {
+                          const modelsWithP = activeModelList.filter((m) => m.params.includes(pKey));
+                          const isShared = modelsWithP.length > 1;
+
+                          return (
+                            <tr key={pKey} className="hover:bg-[#f6f8fa]">
+                              <td className="py-3 px-4 font-mono font-bold text-[#1f2328]">
+                                <div className="flex items-center gap-2">
+                                  <span>{pKey}</span>
+                                  {isShared ? (
+                                    <span className="bg-[#8250df]/10 text-[#8250df] text-[10px] px-2 py-0.5 rounded font-semibold border border-[#8250df]/20 font-sans">
+                                      Shared ({modelsWithP.length})
+                                    </span>
+                                  ) : (
+                                    <span className="bg-[#eaeef2] text-[#59636e] text-[10px] px-2 py-0.5 rounded font-semibold font-sans">
+                                      Unique
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {activeModelList.map((m) => {
+                                const isIncluded = m.params.includes(pKey);
+
+                                return (
+                                  <td key={m.name} className="py-2.5 px-4 text-center align-middle">
+                                    <div className="flex justify-center items-center">
+                                      {isIncluded ? (
+                                        <div
+                                          className="w-5 h-5 rounded-sm shadow-2xs transition-transform hover:scale-110"
+                                          style={{ backgroundColor: m.color }}
+                                          title={`${m.name} includes ${pKey}`}
+                                        />
+                                      ) : (
+                                        <div
+                                          className="w-5 h-5 rounded-sm border border-dashed border-[#d1d9e0] bg-[#f6f8fa]/60"
+                                          title={`${m.name} excludes ${pKey}`}
+                                        />
+                                      )}
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot className="bg-[#f6f8fa] border-t-2 border-[#d1d9e0] font-mono">
+                        <tr>
+                          <td className="py-2.5 px-4 font-bold text-[#1f2328]">Total Parameters (k)</td>
+                          {activeModelList.map((m) => (
+                            <td key={m.name} className="py-2.5 px-4 text-center font-bold" style={{ color: m.color }}>
+                              k = {m.k}
+                            </td>
+                          ))}
+                        </tr>
+                      </tfoot>
+                    </table>
+
+                    <div className="p-3 bg-[#f6f8fa] border-t border-[#eaeef2] text-[11px] text-[#59636e] font-sans flex items-center gap-6">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 rounded-sm bg-[#0969da] inline-block shadow-2xs" />
+                        <span>Filled square = Parameter is included in model</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 rounded-sm border border-dashed border-[#d1d9e0] bg-white inline-block" />
+                        <span>Dashed outline = Parameter not included</span>
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Parameter Comparison Visualization */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {activeModelList
-                    .filter((m) => (compareParamKey === 'alpha' ? m.alphaMean !== undefined : m.betaMean !== undefined))
-                    .map((m) => {
-                      const mean = compareParamKey === 'alpha' ? m.alphaMean! : m.betaMean!;
-                      const sd = compareParamKey === 'alpha' ? m.alphaSD! : m.betaSD!;
-                      const subjects = compareParamKey === 'alpha' ? m.alphaSubjects! : m.betaSubjects!;
+                {/* COLLAPSIBLE MODEL FUNCTIONS SOURCE CODE */}
+                <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-[#eaeef2]">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
+                        <FileCode className="w-4 h-4 text-[#0969da]" />
+                        Model Function Source Code Inspection
+                      </h3>
+                      <p className="text-xs text-[#59636e]">
+                        Select a model to view its exact Python implementation function. Collapsible to save vertical space.
+                      </p>
+                    </div>
 
-                      return (
-                        <div key={m.name} className="border border-[#eaeef2] rounded-lg p-4 bg-white space-y-3">
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-xs font-mono text-[#1f2328] flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.color }} />
-                              {m.name}
-                            </span>
-                            <span className="text-[11px] font-mono text-[#8250df] font-semibold">
-                              μ = {mean.toFixed(3)} (±{sd.toFixed(3)})
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setIsCodeCollapsed(!isCodeCollapsed)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1f2328] bg-[#f6f8fa] border border-[#d1d9e0] rounded-md hover:bg-[#eaeef2] transition-colors cursor-pointer"
+                      >
+                        <span>{isCodeCollapsed ? '📁 Show Code' : '📂 Hide Code'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {!isCodeCollapsed && (
+                    <div className="space-y-3">
+                      {/* Model Selector Tabs */}
+                      <div className="flex items-center gap-2 flex-wrap border-b border-[#eaeef2] pb-2">
+                        {activeModelList.map((m) => {
+                          const isCurrent = selectedCodeModel === m.name;
+                          return (
+                            <button
+                              key={m.name}
+                              onClick={() => setSelectedCodeModel(m.name)}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all cursor-pointer border ${
+                                isCurrent
+                                  ? 'bg-[#0969da]/10 text-[#0969da] border-[#0969da]/30 font-bold shadow-2xs'
+                                  : 'bg-transparent text-[#59636e] border-transparent hover:bg-[#f6f8fa]'
+                              }`}
+                            >
+                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: m.color }} />
+                              <span>{m.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Code Display Container */}
+                      <div className="bg-[#0d1117] border border-[#30363d] rounded-lg overflow-hidden shadow-inner font-mono">
+                        <div className="bg-[#161b22] px-4 py-2 border-b border-[#30363d] flex items-center justify-between text-xs text-[#8b949e]">
+                          <div className="flex items-center gap-2">
+                            <div className="flex gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]" />
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]" />
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]" />
+                            </div>
+                            <span className="text-[#c9d1d9] font-semibold text-xs ml-2">
+                              {selectedCodeModel}.py
                             </span>
                           </div>
-
-                          {/* Scatter of subjects & population bar */}
-                          <div className="h-44 border border-[#eaeef2] rounded bg-[#f6f8fa]/50 p-2 relative flex flex-col justify-between">
-                            <div className="text-[10px] font-mono text-[#8c959f] flex justify-between">
-                              <span>Population ±1 SD</span>
-                              <span>[{ (mean - sd).toFixed(2) }, { (mean + sd).toFixed(2) }]</span>
-                            </div>
-
-                            {/* Subjects jittered dots */}
-                            <div className="space-y-1">
-                              {subjects.map((sVal, sIdx) => {
-                                const minScale = compareParamKey === 'alpha' ? 0.2 : 1.5;
-                                const maxScale = compareParamKey === 'alpha' ? 0.6 : 4.0;
-                                const pct = ((sVal - minScale) / (maxScale - minScale)) * 100;
-                                return (
-                                  <div key={sIdx} className="relative h-2 w-full">
-                                    <div
-                                      style={{ left: `${Math.min(95, Math.max(5, pct))}%`, backgroundColor: m.color }}
-                                      className="absolute w-2.5 h-2.5 -top-0.5 rounded-full shadow-2xs opacity-85"
-                                      title={`Subject ${sIdx}: ${sVal.toFixed(3)}`}
-                                    />
-                                  </div>
-                                );
-                              })}
-                            </div>
-
-                            <div className="text-[10px] font-mono text-[#59636e] flex justify-between border-t border-[#eaeef2] pt-1">
-                              <span>Min: {Math.min(...subjects).toFixed(2)}</span>
-                              <span>Max: {Math.max(...subjects).toFixed(2)}</span>
-                            </div>
-                          </div>
+                          <button
+                            onClick={() => handleCopyCompareCode(COMPARISON_MODELS[selectedCodeModel]?.code || '')}
+                            className="flex items-center gap-1 px-2.5 py-1 text-[11px] text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                          >
+                            {copiedCompareCode ? (
+                              <>
+                                <Check className="w-3 h-3 text-[#27c93f]" />
+                                <span className="text-[#27c93f]">Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Copy Python Code</span>
+                              </>
+                            )}
+                          </button>
                         </div>
-                      );
-                    })}
+                        <pre className="p-4 text-xs text-[#e6edf3] overflow-x-auto max-h-[320px] leading-relaxed">
+                          <code>{COMPARISON_MODELS[selectedCodeModel]?.code}</code>
+                        </pre>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="p-3 bg-[#f6f8fa] border border-[#d1d9e0] rounded-md text-xs font-mono text-[#59636e] flex items-center justify-between">
-                  <span># Python code to generate this comparative report:</span>
-                  <span className="text-[#0969da] font-semibold">
-                    compare_models([m1, m2, m3], compare_params=["{compareParamKey}"])
+                {/* Page 2 Footer Navigation */}
+                <div className="flex justify-between items-center pt-2">
+                  <button
+                    onClick={() => setComparisonSubTab('fit')}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#0969da] hover:bg-[#f6f8fa] text-xs font-semibold text-[#59636e] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Previous: Fit &amp; BICs</span>
+                  </button>
+                  <button
+                    onClick={() => setComparisonSubTab('evolution')}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#8250df] hover:bg-[#f6f8fa] text-xs font-semibold text-[#8250df] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <span>Next Page: Parameter Evolution Comparison</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ============================================================== */}
+            {/* PAGE 3: PARAMETER EVOLUTION COMPARISON (SHARED ON SAME PLOTS)  */}
+            {/* ============================================================== */}
+            {comparisonSubTab === 'evolution' && (
+              <div className="space-y-6">
+                <div className="bg-white border-l-4 border-l-[#8250df] border border-[#d1d9e0] rounded-xl p-4 shadow-2xs flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-[#1f2328]">
+                      Page 3: Parameter Evolution Comparison Across Iterations
+                    </h2>
+                    <p className="text-xs text-[#59636e]">
+                      All parameters compared across iterations. Shared parameters are plotted together on the same subplots for direct visual comparison; unique parameters are shown for their respective models.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#8250df]/10 text-[#8250df]">
+                    Page 3 of 3
                   </span>
+                </div>
+
+                {/* PARAMETER EVOLUTION COMPARISON GRID */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {Array.from(new Set(activeModelList.flatMap((m) => m.params))).map((pKey) => {
+                    const modelsWithP = activeModelList.filter((m) => m.params.includes(pKey));
+                    const isShared = modelsWithP.length > 1;
+
+                    // Compute y-axis scale across all models containing this parameter
+                    const allVals = modelsWithP.flatMap((m) => m.paramEvolutions?.[pKey] || []);
+                    const pMin = allVals.length ? Math.min(...allVals) : 0;
+                    const pMax = allVals.length ? Math.max(...allVals) : 1;
+                    const pRange = pMax - pMin || 1;
+                    const padMin = pMin - 0.1 * pRange;
+                    const padMax = pMax + 0.1 * pRange;
+                    const padRange = padMax - padMin || 1;
+
+                    const getP_X = (it: number) => subPad.left + (it / 11) * (subW - subPad.left - subPad.right);
+                    const getP_Y = (val: number) =>
+                      subH - subPad.bottom - ((val - padMin) / padRange) * (subH - subPad.top - subPad.bottom);
+
+                    return (
+                      <div key={pKey} className="border border-[#eaeef2] rounded-xl p-4 bg-white shadow-2xs space-y-2">
+                        <div className="flex items-center justify-between text-xs font-mono pb-1 border-b border-[#eaeef2]">
+                          <span className="font-bold text-[#1f2328] text-sm">{pKey}</span>
+                          {isShared ? (
+                            <span className="bg-[#8250df]/10 text-[#8250df] text-[10px] px-2 py-0.5 rounded font-semibold border border-[#8250df]/20 font-sans">
+                              Shared ({modelsWithP.length} models)
+                            </span>
+                          ) : (
+                            <span className="bg-[#eaeef2] text-[#59636e] text-[10px] px-2 py-0.5 rounded font-semibold font-sans">
+                              Specific to {modelsWithP[0]?.name}
+                            </span>
+                          )}
+                        </div>
+
+                        <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full h-44 select-none">
+                          {[0, 0.5, 1.0].map((frac, idx) => {
+                            const y = subPad.top + frac * (subH - subPad.top - subPad.bottom);
+                            const val = padMax - frac * padRange;
+                            return (
+                              <g key={idx}>
+                                <line x1={subPad.left} y1={y} x2={subW - subPad.right} y2={y} stroke="#eaeef2" />
+                                <text x={subPad.left - 6} y={y + 3} textAnchor="end" fontSize="9" fill="#8c959f" fontFamily="monospace">
+                                  {val.toFixed(2)}
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          {/* Line for each model containing this parameter */}
+                          {modelsWithP.map((m) => {
+                            const evo = m.paramEvolutions?.[pKey] || [];
+                            const lineD = evo
+                              .map((val, idx) => `${idx === 0 ? 'M' : 'L'} ${getP_X(idx)},${getP_Y(val)}`)
+                              .join(' ');
+
+                            return (
+                              <g key={m.name}>
+                                <path d={lineD} fill="none" stroke={m.color} strokeWidth="2.2" />
+                                {evo.map((val, idx) => (
+                                  <circle
+                                    key={idx}
+                                    cx={getP_X(idx)}
+                                    cy={getP_Y(val)}
+                                    r="2.5"
+                                    fill={m.color}
+                                    stroke="#fff"
+                                    strokeWidth="1"
+                                  >
+                                    <title>{`${m.name} | Iter ${idx}: ${val.toFixed(3)}`}</title>
+                                  </circle>
+                                ))}
+                              </g>
+                            );
+                          })}
+                        </svg>
+
+                        {/* Subplot Legend */}
+                        <div className="flex items-center gap-3 flex-wrap pt-1 border-t border-[#eaeef2] text-[11px] font-mono">
+                          {modelsWithP.map((m) => {
+                            const finalVal = m.paramEvolutions?.[pKey]?.[11];
+                            return (
+                              <div key={m.name} className="flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: m.color }} />
+                                <span className="text-[#59636e]">{m.name}:</span>
+                                <strong className="text-[#1f2328]">{finalVal !== undefined ? finalVal.toFixed(3) : '—'}</strong>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Page 3 Footer Navigation */}
+                <div className="flex justify-between items-center pt-2">
+                  <button
+                    onClick={() => setComparisonSubTab('matrix')}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#1a7f37] hover:bg-[#f6f8fa] text-xs font-semibold text-[#59636e] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Previous: Parameter Matrix &amp; Code</span>
+                  </button>
+                  <div className="text-xs text-[#59636e]">
+                    Viewing Page 3 of 3: Parameter Evolution Comparison
+                  </div>
                 </div>
               </div>
             )}
@@ -778,10 +1373,13 @@ export default function App() {
                   </span>
                 </div>
                 <h1 className="text-2xl font-bold text-[#1f2328]">
-                  Model Diagnostics &amp; Estimation Results
+                  {mockMetadata.model_name}
                 </h1>
-                <p className="text-sm text-[#59636e] mt-1">
-                  10 Subjects • 6 Parameters • Converged in 12 Iterations (1,000 particles/subject)
+                <p className="text-sm font-semibold text-[#0969da] mt-0.5">
+                  {mockMetadata.description}
+                </p>
+                <p className="text-xs text-[#59636e] mt-1">
+                  {mockMetadata.n_subjects} Subjects • {mockMetadata.n_params} Parameters • Converged in {mockMetadata.iterations} Iterations ({mockMetadata.total_fit_time_formatted}) • Run: {mockMetadata.last_fit_at}
                 </p>
               </div>
 
@@ -797,81 +1395,207 @@ export default function App() {
               </div>
             </div>
 
-            {/* Total Model Evidence & Subject Spaghetti Curves */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
-                <div className="pb-2 border-b border-[#d1d9e0]">
-                  <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-[#0969da]" />
-                    Total Model Evidence &amp; BIC
-                  </h3>
-                  <p className="text-xs text-[#59636e]">Evidence climbing to maximum; BIC minimizing.</p>
-                </div>
-                <svg viewBox={`0 0 ${fitW} ${fitH}`} className="w-full h-48 select-none">
-                  {[0, 0.5, 1.0].map((frac, idx) => {
-                    const yPos = fitPad.top + frac * (fitH - fitPad.top - fitPad.bottom);
-                    const val = evMax - frac * evRange;
-                    return (
-                      <g key={idx}>
-                        <line x1={fitPad.left} y1={yPos} x2={fitW - fitPad.right} y2={yPos} stroke="#eaeef2" />
-                        <text x={fitPad.left - 8} y={yPos + 4} textAnchor="end" fontSize="10" fill="#8c959f" fontFamily="monospace">
-                          {val.toFixed(0)}
-                        </text>
-                      </g>
-                    );
-                  })}
-                  <path d={evidenceD} fill="none" stroke="#0969da" strokeWidth="2.5" />
-                  {mockEvidence.map((ev, idx) => (
-                    <circle key={idx} cx={getFitX(idx)} cy={getEvY(ev)} r="3" fill="#0969da" stroke="#fff" strokeWidth="1" />
-                  ))}
-                </svg>
+            {/* Sub-tab navigation bar for Single Model Report */}
+            <div className="bg-white border border-[#d1d9e0] rounded-xl p-3 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex bg-[#f6f8fa] p-1 border border-[#d1d9e0] rounded-lg text-xs font-medium gap-1">
+                <button
+                  onClick={() => setActiveReportPage('fit')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-pointer transition-all ${
+                    activeReportPage === 'fit'
+                      ? 'bg-white text-[#0969da] font-semibold shadow-2xs'
+                      : 'text-[#59636e] hover:text-[#1f2328]'
+                  }`}
+                >
+                  <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    activeReportPage === 'fit' ? 'bg-[#0969da] text-white' : 'bg-[#eaeef2] text-[#59636e]'
+                  }`}>1</span>
+                  <Activity className="w-3.5 h-3.5" />
+                  <span>General Fit</span>
+                </button>
+                <button
+                  onClick={() => setActiveReportPage('params')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-pointer transition-all ${
+                    activeReportPage === 'params'
+                      ? 'bg-white text-[#1a7f37] font-semibold shadow-2xs'
+                      : 'text-[#59636e] hover:text-[#1f2328]'
+                  }`}
+                >
+                  <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    activeReportPage === 'params' ? 'bg-[#1a7f37] text-white' : 'bg-[#eaeef2] text-[#59636e]'
+                  }`}>2</span>
+                  <Grid className="w-3.5 h-3.5" />
+                  <span>Parameters</span>
+                </button>
+                <button
+                  onClick={() => setActiveReportPage('metadata')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-pointer transition-all ${
+                    activeReportPage === 'metadata'
+                      ? 'bg-white text-[#8250df] font-semibold shadow-2xs'
+                      : 'text-[#59636e] hover:text-[#1f2328]'
+                  }`}
+                >
+                  <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    activeReportPage === 'metadata' ? 'bg-[#8250df] text-white' : 'bg-[#eaeef2] text-[#59636e]'
+                  }`}>3</span>
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Model &amp; Metadata</span>
+                </button>
               </div>
 
-              <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
-                <div className="pb-2 border-b border-[#d1d9e0]">
-                  <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-[#8250df]" />
-                    Subject-Level Evidence Spaghetti Plot
-                  </h3>
-                  <p className="text-xs text-[#59636e]">Per-subject log-likelihood trajectories.</p>
-                </div>
-                <svg viewBox={`0 0 ${fitW} ${fitH}`} className="w-full h-48 select-none">
-                  {[0, 0.5, 1.0].map((frac, idx) => {
-                    const yPos = fitPad.top + frac * (fitH - fitPad.top - fitPad.bottom);
-                    const val = -13.0 - frac * 9;
-                    return (
-                      <g key={idx}>
-                        <line x1={fitPad.left} y1={yPos} x2={fitW - fitPad.right} y2={yPos} stroke="#eaeef2" />
-                        <text x={fitPad.left - 8} y={yPos + 4} textAnchor="end" fontSize="10" fill="#8c959f" fontFamily="monospace">
-                          {val.toFixed(1)}
-                        </text>
-                      </g>
-                    );
-                  })}
-                  {mockSubjSpaghetti.map((traj, s) => {
-                    const d = traj
-                      .map((val, idx) => {
-                        const y = fitH - fitPad.bottom - ((val - -22.5) / 10) * (fitH - fitPad.top - fitPad.bottom);
-                        return `${idx === 0 ? 'M' : 'L'} ${getFitX(idx)},${y}`;
-                      })
-                      .join(' ');
-                    const isHovered = hoveredSubj === s;
-                    return (
-                      <path
-                        key={s}
-                        d={d}
-                        fill="none"
-                        stroke={isHovered ? '#8250df' : 'rgba(89, 99, 110, 0.3)'}
-                        strokeWidth={isHovered ? 2.5 : 1}
-                        className="cursor-pointer transition-all"
-                        onMouseEnter={() => setHoveredSubj(s)}
-                        onMouseLeave={() => setHoveredSubj(null)}
-                      />
-                    );
-                  })}
-                </svg>
-              </div>
+              <span className="text-xs text-[#59636e] font-mono hidden sm:inline">
+                {activeReportPage === 'fit' && 'Page 1 of 3: Evidence & Convergence'}
+                {activeReportPage === 'params' && 'Page 2 of 3: Estimated Parameters & Heatmap'}
+                {activeReportPage === 'metadata' && 'Page 3 of 3: Code & JSON Metadata'}
+              </span>
             </div>
+
+            {/* PAGE 1: GENERAL FIT */}
+            {activeReportPage === 'fit' && (
+              <div className="space-y-6">
+                <div className="bg-white border-l-4 border-l-[#0969da] border border-[#d1d9e0] rounded-xl p-4 shadow-2xs flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-[#1f2328]">
+                      Page 1: General Model Fit &amp; Convergence Diagnostics
+                    </h2>
+                    <p className="text-xs text-[#59636e]">
+                      Total population evidence trajectory, BIC minimization path, and subject-level convergence stability.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#0969da]/10 text-[#0969da]">
+                    Page 1 of 3
+                  </span>
+                </div>
+
+                {/* Total Model Evidence & Subject Spaghetti Curves */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
+                    <div className="pb-2 border-b border-[#d1d9e0]">
+                      <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-[#0969da]" />
+                        Total Model Evidence &amp; BIC
+                      </h3>
+                      <p className="text-xs text-[#59636e]">Evidence climbing to maximum; BIC minimizing.</p>
+                    </div>
+                    <svg viewBox={`0 0 ${fitW} ${fitH}`} className="w-full h-48 select-none">
+                      {[0, 0.5, 1.0].map((frac, idx) => {
+                        const yPos = fitPad.top + frac * (fitH - fitPad.top - fitPad.bottom);
+                        const val = evMax - frac * evRange;
+                        return (
+                          <g key={idx}>
+                            <line x1={fitPad.left} y1={yPos} x2={fitW - fitPad.right} y2={yPos} stroke="#eaeef2" />
+                            <text x={fitPad.left - 8} y={yPos + 4} textAnchor="end" fontSize="10" fill="#8c959f" fontFamily="monospace">
+                              {val.toFixed(0)}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      <path d={evidenceD} fill="none" stroke="#0969da" strokeWidth="2.5" />
+                      {mockEvidence.map((ev, idx) => (
+                        <circle key={idx} cx={getFitX(idx)} cy={getEvY(ev)} r="3" fill="#0969da" stroke="#fff" strokeWidth="1" />
+                      ))}
+                    </svg>
+                  </div>
+
+                  <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
+                    <div className="pb-2 border-b border-[#d1d9e0]">
+                      <h3 className="text-sm font-bold text-[#1f2328] flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-[#8250df]" />
+                        Subject-Level Evidence Spaghetti Plot
+                      </h3>
+                      <p className="text-xs text-[#59636e]">Per-subject log-likelihood trajectories.</p>
+                    </div>
+                    <svg viewBox={`0 0 ${fitW} ${fitH}`} className="w-full h-48 select-none">
+                      {[0, 0.5, 1.0].map((frac, idx) => {
+                        const yPos = fitPad.top + frac * (fitH - fitPad.top - fitPad.bottom);
+                        const val = -13.0 - frac * 9;
+                        return (
+                          <g key={idx}>
+                            <line x1={fitPad.left} y1={yPos} x2={fitW - fitPad.right} y2={yPos} stroke="#eaeef2" />
+                            <text x={fitPad.left - 8} y={yPos + 4} textAnchor="end" fontSize="10" fill="#8c959f" fontFamily="monospace">
+                              {val.toFixed(1)}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      {mockSubjSpaghetti.map((traj, s) => {
+                        const d = traj
+                          .map((val, idx) => {
+                            const y = fitH - fitPad.bottom - ((val - -22.5) / 10) * (fitH - fitPad.top - fitPad.bottom);
+                            return `${idx === 0 ? 'M' : 'L'} ${getFitX(idx)},${y}`;
+                          })
+                          .join(' ');
+                        const isHovered = hoveredSubj === s;
+                        return (
+                          <path
+                            key={s}
+                            d={d}
+                            fill="none"
+                            stroke={isHovered ? '#8250df' : 'rgba(89, 99, 110, 0.3)'}
+                            strokeWidth={isHovered ? 2.5 : 1}
+                            className="cursor-pointer transition-all"
+                            onMouseEnter={() => setHoveredSubj(s)}
+                            onMouseLeave={() => setHoveredSubj(null)}
+                          />
+                        );
+                      })}
+                    </svg>
+                  </div>
+                </div>
+
+                {/* Key Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-[#59636e]">Total Evidence</div>
+                    <div className="text-xl font-bold font-mono text-[#0969da]">-141.30</div>
+                    <div className="text-[11px] text-[#59636e]">Log-marginal likelihood</div>
+                  </div>
+                  <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-[#59636e]">Final BIC</div>
+                    <div className="text-xl font-bold font-mono text-[#1a7f37]">291.90</div>
+                    <div className="text-[11px] text-[#59636e]">Penalized criteria</div>
+                  </div>
+                  <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-[#59636e]">Iterations</div>
+                    <div className="text-xl font-bold font-mono text-[#1f2328]">12 / 12</div>
+                    <div className="text-[11px] text-[#1a7f37] font-semibold">Converged (Δev &lt; 0.5)</div>
+                  </div>
+                  <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-[#59636e]">Duration</div>
+                    <div className="text-xl font-bold font-mono text-[#8250df]">14.82s</div>
+                    <div className="text-[11px] text-[#59636e]">1,000 particles/subj</div>
+                  </div>
+                </div>
+
+                {/* Page 1 Footer */}
+                <div className="flex justify-between items-center pt-2">
+                  <div className="text-xs text-[#59636e]">Viewing Page 1 of 3: General Fit</div>
+                  <button
+                    onClick={() => setActiveReportPage('params')}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#1a7f37] hover:bg-[#f6f8fa] text-xs font-semibold text-[#1a7f37] shadow-2xs transition-all cursor-pointer"
+                  >
+                    <span>Next Page: Parameters</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* PAGE 2: PARAMETERS */}
+            {activeReportPage === 'params' && (
+              <div className="space-y-6">
+                <div className="bg-white border-l-4 border-l-[#1a7f37] border border-[#d1d9e0] rounded-xl p-4 shadow-2xs flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-[#1f2328]">
+                      Page 2: Model Hyperparameters, Evolution &amp; Correlation Heatmap
+                    </h2>
+                    <p className="text-xs text-[#59636e]">
+                      Fitted population distributions, evolution trajectories across iterations, subject posterior draws, and latent bivariate correlation matrix.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#1a7f37]/10 text-[#1a7f37]">
+                    Page 2 of 3
+                  </span>
+                </div>
 
             {/* Parameters Table */}
             <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
@@ -1218,8 +1942,185 @@ export default function App() {
                 </table>
               </div>
             </div>
+
+            {/* Page 2 Footer Navigation */}
+            <div className="flex justify-between items-center pt-2">
+              <button
+                onClick={() => setActiveReportPage('fit')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#0969da] hover:bg-[#f6f8fa] text-xs font-semibold text-[#59636e] shadow-2xs transition-all cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Previous: General Fit</span>
+              </button>
+              <button
+                onClick={() => setActiveReportPage('metadata')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#8250df] hover:bg-[#f6f8fa] text-xs font-semibold text-[#8250df] shadow-2xs transition-all cursor-pointer"
+              >
+                <span>Next Page: Model &amp; Metadata</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
+
+        {/* PAGE 3: MODEL CODE & COMPANION METADATA */}
+        {activeReportPage === 'metadata' && (
+          <div className="space-y-6">
+            <div className="bg-white border-l-4 border-l-[#8250df] border border-[#d1d9e0] rounded-xl p-4 shadow-2xs flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-[#1f2328]">
+                  Page 3: Model Architecture, Source Code &amp; Run Metadata
+                </h2>
+                <p className="text-xs text-[#59636e]">
+                  Inspect the exact Python function fitted by IIS, execution duration, and full serialized metadata JSON.
+                </p>
+              </div>
+              <span className="px-2.5 py-1 rounded-md text-xs font-mono font-semibold bg-[#8250df]/10 text-[#8250df]">
+                Page 3 of 3
+              </span>
+            </div>
+
+            {/* Model Description Card */}
+            <div className="bg-white border border-[#d1d9e0] border-l-4 border-l-[#0969da] rounded-xl p-4 shadow-2xs space-y-1">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-[#0969da]">
+                Model Description
+              </div>
+              <div className="text-sm font-semibold text-[#1f2328]">
+                {mockMetadata.description}
+              </div>
+            </div>
+
+            {/* Metadata 4-Grid Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-2">
+                <div className="text-[11px] font-bold uppercase text-[#59636e]">🕒 Timestamps</div>
+                <div className="text-xs font-mono space-y-1 text-[#1f2328]">
+                  <div><span className="text-[#8c959f]">Run:</span> {mockMetadata.last_fit_at}</div>
+                  <div><span className="text-[#8c959f]">Created:</span> {mockMetadata.created_at}</div>
+                  <div><span className="text-[#8c959f]">Saved:</span> {mockMetadata.saved_at}</div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-2">
+                <div className="text-[11px] font-bold uppercase text-[#59636e]">⏱️ Execution Time</div>
+                <div className="text-xs font-mono space-y-1 text-[#1f2328]">
+                  <div><span className="text-[#8c959f]">Duration:</span> <strong className="text-[#0969da]">{mockMetadata.total_fit_time_formatted}</strong></div>
+                  <div><span className="text-[#8c959f]">Exact:</span> {mockMetadata.total_fit_time_seconds}s</div>
+                  <div><span className="text-[#8c959f]">Iterations:</span> <strong>{mockMetadata.iterations}</strong> converged</div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-2">
+                <div className="text-[11px] font-bold uppercase text-[#59636e]">👥 Model Dimensions</div>
+                <div className="text-xs font-mono space-y-1 text-[#1f2328]">
+                  <div><span className="text-[#8c959f]">Subjects:</span> <strong>{mockMetadata.n_subjects}</strong></div>
+                  <div><span className="text-[#8c959f]">Parameters:</span> <strong>{mockMetadata.n_params}</strong></div>
+                  <div><span className="text-[#8c959f]">Choices:</span> {mockMetadata.n_choices}</div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-2">
+                <div className="text-[11px] font-bold uppercase text-[#59636e]">⚙️ System &amp; Method</div>
+                <div className="text-xs font-mono space-y-1 text-[#1f2328]">
+                  <div><span className="text-[#8c959f]">Python:</span> {mockMetadata.system_info.python_version}</div>
+                  <div><span className="text-[#8c959f]">Platform:</span> {mockMetadata.system_info.platform}</div>
+                  <div><span className="text-[#8c959f]">Covariance:</span> {mockMetadata.multinormal}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Python Model Source Code Viewer */}
+            <div className="bg-[#0d1117] rounded-xl border border-[#30363d] overflow-hidden shadow-2xs">
+              <div className="flex items-center justify-between px-4 py-2.5 bg-[#161b22] border-b border-[#30363d]">
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1.5">
+                    <div className="w-3 h-3 rounded-full bg-[#ff5f56]" />
+                    <div className="w-3 h-3 rounded-full bg-[#ffbd2e]" />
+                    <div className="w-3 h-3 rounded-full bg-[#27c93f]" />
+                  </div>
+                  <span className="text-[#c9d1d9] font-mono text-xs font-semibold ml-2">
+                    {mockMetadata.model_name}.py (Fitted Model Function)
+                  </span>
+                </div>
+                <button
+                  onClick={handleCopyCode}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                >
+                  {copiedCode ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-[#27c93f]" />
+                      <span className="text-[#27c93f]">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy Code</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              <pre className="p-4 text-xs font-mono text-[#e6edf3] overflow-x-auto max-h-[380px] leading-relaxed">
+                <code>{mockMetadata.model_code}</code>
+              </pre>
+            </div>
+
+            {/* Companion Metadata JSON File Viewer */}
+            <div className="bg-[#0d1117] rounded-xl border border-[#30363d] overflow-hidden shadow-2xs">
+              <div className="flex items-center justify-between px-4 py-2.5 bg-[#161b22] border-b border-[#30363d]">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-[#8250df]" />
+                  <span className="text-[#c9d1d9] font-mono text-xs font-semibold">
+                    {mockMetadata.model_name}_metadata.json (Companion Metadata)
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleDownloadMetadata}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download JSON</span>
+                  </button>
+                  <button
+                    onClick={handleCopyJson}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                  >
+                    {copiedJson ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-[#27c93f]" />
+                        <span className="text-[#27c93f]">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy JSON</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <pre className="p-4 text-xs font-mono text-[#8b949e] overflow-x-auto max-h-[340px] leading-relaxed">
+                <code>{JSON.stringify(mockMetadata, null, 2)}</code>
+              </pre>
+            </div>
+
+            {/* Page 3 Footer Navigation */}
+            <div className="flex justify-between items-center pt-2">
+              <button
+                onClick={() => setActiveReportPage('params')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-[#d1d9e0] hover:border-[#1a7f37] hover:bg-[#f6f8fa] text-xs font-semibold text-[#59636e] shadow-2xs transition-all cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Previous: Parameters &amp; Heatmap</span>
+              </button>
+              <div className="text-xs text-[#59636e]">
+                Viewing Page 3 of 3: Model &amp; Metadata
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )}
 
         {/* ============================================================== */}
         {/* TAB 3: DOCUMENTATION & API REFERENCE                           */}

@@ -742,6 +742,16 @@ class Sampler:
 
         self.iterations = 0
 
+        # Model source code and metadata tracking
+        try:
+            self.model_code: str = inspect.getsource(self.model)
+        except Exception:
+            self.model_code = getattr(self.model, "__doc__", "") or str(self.model)
+
+        self.last_fit_time: Optional[str] = None
+        self.saved_timestamp: Optional[str] = None
+        self.metadata: Dict[str, Any] = {}
+
         # Primary Evidence Attributes
         self.evidence: List[float] = []                    # General evidence (total log marginal LL across subjects)
         self.subj_evidence: List[List[float]] = []         # Subject-level evidence (shape: [n_iterations, n_subjects])
@@ -1170,6 +1180,9 @@ class Sampler:
         if show_iter_bar and hasattr(iter_pbar, "close"):
             iter_pbar.close()
 
+        self.last_fit_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self.metadata = self.get_metadata()
+
         return self
 
     # -------------------------------------------------------------------------
@@ -1320,9 +1333,93 @@ class Sampler:
     # Persistence & Summary
     # -------------------------------------------------------------------------
 
-    def save_model(self, filename: str = "", directory: str = "saved_models") -> str:
-        """Save this sampler object to disk."""
-        return _save_model_func(self, filename=filename, directory=directory)
+    def get_metadata(self, saved_timestamp: Optional[str] = None) -> Dict[str, Any]:
+        """Construct a comprehensive metadata dictionary describing the fitted model and run.
+
+        Includes timestamp, fit duration, iterations, parameter statistics, convergence,
+        group differences, and the exact Python source code of the user's model function.
+        """
+        import platform
+
+        saved_time = saved_timestamp or time.strftime("%Y-%m-%d %H:%M:%S")
+        final_ev = float(self.evidence[-1]) if self.evidence else None
+        final_bic = float(self.BIC[-1]) if self.BIC else None
+
+        param_summary = {}
+        for p in self.params:
+            hp = self.hyper_params.get(p, {})
+            p_mean = float(hp.get("mean", 0.0))
+            p_sd = float(hp.get("sd", 1.0))
+            t_func = self.transformations.get(p, lambda x: x)
+            try:
+                t_mean = float(t_func(np.array([p_mean]))[0])
+            except Exception:
+                t_mean = p_mean
+            param_summary[p] = {
+                "latent_mean": round(p_mean, 6),
+                "latent_sd": round(p_sd, 6),
+                "transformed_mean": round(t_mean, 6),
+            }
+
+        group_diff_meta = {}
+        for p, col in self.group_diff.items():
+            col_str = ".".join(str(c) for c in col) if isinstance(col, (list, tuple)) else str(col)
+            group_diff_meta[p] = {
+                "column": col_str,
+                "groups": self.group_names.get(p, []),
+                "reference_group": self.ref_group.get(p, ""),
+                "group_means": {g: round(float(v), 6) for g, v in self.group_means.get(p, {}).items()},
+                "group_diffs": {k: round(float(v), 6) for k, v in self.group_diffs.get(p, {}).items()},
+            }
+
+        meta: Dict[str, Any] = {
+            "model_name": self.model_name,
+            "description": self.description,
+            "type": self.type,
+            "timestamp": saved_time,
+            "created_at": self.creation_time,
+            "last_fit_at": self.last_fit_time or self.creation_time,
+            "total_fit_time_seconds": round(float(self.total_fit_time), 3),
+            "total_fit_time_formatted": time_to_text(self.total_fit_time),
+            "iterations": int(self.iterations),
+            "n_subjects": int(self.n_subjects),
+            "n_params": int(self.n_params),
+            "params": list(self.params),
+            "param_summary": param_summary,
+            "multinormal": self.multinormal if isinstance(self.multinormal, (bool, str)) else str(self.multinormal),
+            "group_diff": group_diff_meta if group_diff_meta else None,
+            "n_choices": int(self.n_choices),
+            "final_evidence": final_ev,
+            "final_bic": final_bic,
+            "model_code": getattr(self, "model_code", ""),
+            "system_info": {
+                "python_version": sys.version.split()[0],
+                "platform": platform.platform(),
+            },
+        }
+        self.metadata = meta
+        return meta
+
+    def save_model(
+        self,
+        filename: str = "",
+        directory: str = "saved_models",
+        save_metadata_file: bool = True,
+        timestamp: Optional[str] = None,
+    ) -> str:
+        """Save this sampler object to disk along with its metadata JSON file.
+
+        The complete model metadata (fit duration, iterations, parameters, timestamps,
+        and model code) is saved inside the .pkl file itself as `sampler.metadata`
+        and also written to a companion `{filename}_metadata.json` file.
+        """
+        return _save_model_func(
+            self,
+            filename=filename,
+            directory=directory,
+            save_metadata_file=save_metadata_file,
+            timestamp=timestamp,
+        )
 
     def summary(self) -> None:
         """Print fit summary statistics."""

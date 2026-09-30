@@ -518,10 +518,58 @@ def create_report(
         """
 
     # -------------------------------------------------------------------------
-    # Assemble Clean Standalone HTML Document
+    # Assemble Clean Multi-Page Standalone HTML Document
     # -------------------------------------------------------------------------
+    import html as py_html
+    import json
+    from importance_sampling.utils import time_to_text
+
     final_evidence_str = f"{sampler.evidence[-1]:.2f}" if sampler.evidence else "N/A"
     final_bic_str = f"{sampler.BIC[-1]:.2f}" if sampler.BIC else "N/A"
+
+    # Extract or generate comprehensive metadata dictionary
+    if hasattr(sampler, "get_metadata") and callable(getattr(sampler, "get_metadata")):
+        metadata = sampler.get_metadata()
+    elif hasattr(sampler, "metadata") and isinstance(sampler.metadata, dict) and sampler.metadata:
+        metadata = dict(sampler.metadata)
+    else:
+        metadata = {
+            "model_name": sampler.model_name,
+            "created_at": getattr(sampler, "creation_time", "N/A"),
+            "last_fit_at": getattr(sampler, "last_fit_time", None) or getattr(sampler, "creation_time", "N/A"),
+            "total_fit_time_seconds": getattr(sampler, "total_fit_time", 0.0),
+            "total_fit_time_formatted": time_to_text(getattr(sampler, "total_fit_time", 0.0)),
+            "iterations": getattr(sampler, "iterations", 0),
+            "n_subjects": getattr(sampler, "n_subjects", 0),
+            "n_params": getattr(sampler, "n_params", 0),
+            "params": getattr(sampler, "params", []),
+            "final_evidence": float(sampler.evidence[-1]) if sampler.evidence else None,
+            "final_bic": float(sampler.BIC[-1]) if sampler.BIC else None,
+            "model_code": getattr(sampler, "model_code", ""),
+        }
+
+    run_timestamp = metadata.get("last_fit_at") or metadata.get("timestamp") or getattr(sampler, "creation_time", "N/A")
+    created_timestamp = metadata.get("created_at") or getattr(sampler, "creation_time", "N/A")
+    fit_duration_text = metadata.get("total_fit_time_formatted") or time_to_text(getattr(sampler, "total_fit_time", 0.0))
+    fit_duration_secs = f"{getattr(sampler, 'total_fit_time', 0.0):.2f}s"
+    iterations_run = getattr(sampler, "iterations", 0)
+    model_desc_str = getattr(sampler, "description", "") or metadata.get("description", "")
+
+    # Extract user model Python source code
+    model_code_str = getattr(sampler, "model_code", "") or metadata.get("model_code", "")
+    if not model_code_str and hasattr(sampler, "model"):
+        try:
+            import inspect
+            model_code_str = inspect.getsource(sampler.model)
+        except Exception:
+            model_code_str = getattr(sampler.model, "__doc__", "") or str(sampler.model)
+
+    escaped_code = py_html.escape(model_code_str.strip() or "# Model source code could not be inspected")
+    code_lines = len(model_code_str.strip().splitlines()) if model_code_str.strip() else 0
+
+    # Format companion metadata JSON file string
+    raw_metadata_json = json.dumps(metadata, indent=2, default=str)
+    escaped_json = py_html.escape(raw_metadata_json)
 
     evolution_cards_html = "".join([
         f"""
@@ -633,11 +681,1237 @@ def create_report(
             line-height: 1.5;
         }}
         .container {{
-            max-width: 1140px;
+            max-width: 1160px;
             margin: 0 auto;
             display: flex;
             flex-direction: column;
-            gap: 24px;
+            gap: 20px;
+        }}
+        .card {{
+            background: #ffffff;
+            border: 1px solid #d1d9e0;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(31,35,40,0.04);
+        }}
+        .card-header {{
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #eaeef2;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .card-title {{
+            font-size: 15px;
+            font-weight: 700;
+            color: #1f2328;
+        }}
+        .card-subtitle {{
+            font-size: 12px;
+            color: #59636e;
+            margin-top: 2px;
+        }}
+        .grid-2 {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }}
+        .grid-3 {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+        }}
+        .grid-4 {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+        }}
+        @media (max-width: 768px) {{
+            .grid-2 {{ grid-template-columns: 1fr; }}
+            .grid-3 {{ grid-template-columns: 1fr; }}
+            .grid-4 {{ grid-template-columns: 1fr; }}
+        }}
+        .badge {{
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(9, 105, 218, 0.1);
+            color: #0969da;
+            border: 1px solid rgba(9, 105, 218, 0.2);
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 12px;
+        }}
+        th {{
+            background-color: #f6f8fa;
+            color: #59636e;
+            font-weight: 600;
+            padding: 10px 14px;
+            border-bottom: 1px solid #d1d9e0;
+        }}
+
+        /* MULTI-PAGE NAVIGATION BAR */
+        .report-navbar {{
+            background: #ffffff;
+            border: 1px solid #d1d9e0;
+            border-radius: 10px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+            position: sticky;
+            top: 16px;
+            z-index: 100;
+        }}
+        .nav-tabs {{
+            display: flex;
+            gap: 8px;
+        }}
+        .nav-tab {{
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #59636e;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+        }}
+        .nav-tab:hover {{
+            background: #f6f8fa;
+            color: #1f2328;
+        }}
+        .nav-tab.active {{
+            background: rgba(9, 105, 218, 0.08);
+            border-color: rgba(9, 105, 218, 0.25);
+            color: #0969da;
+        }}
+        .nav-tab .tab-badge {{
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            background: #eaeef2;
+            color: #59636e;
+        }}
+        .nav-tab.active .tab-badge {{
+            background: #0969da;
+            color: #ffffff;
+        }}
+        .nav-actions {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .action-btn {{
+            background: #f6f8fa;
+            border: 1px solid #d1d9e0;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #1f2328;
+            cursor: pointer;
+            transition: background 0.15s;
+        }}
+        .action-btn:hover {{
+            background: #eaeef2;
+        }}
+
+        /* PAGE VISIBILITY */
+        .report-page {{
+            display: none;
+            flex-direction: column;
+            gap: 20px;
+            animation: fadeIn 0.15s ease-in-out;
+        }}
+        .report-page.active {{
+            display: flex;
+        }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(3px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+
+        /* PRINT OPTIMIZATION (SEVERAL PAGES) */
+        @media print {{
+            body {{
+                background: #ffffff !important;
+                padding: 0 !important;
+            }}
+            .no-print {{
+                display: none !important;
+            }}
+            .report-page {{
+                display: flex !important;
+                page-break-after: always;
+                break-after: page;
+                margin-bottom: 24px;
+            }}
+            .report-page:last-child {{
+                page-break-after: avoid;
+                break-after: avoid;
+            }}
+            .card {{
+                box-shadow: none !important;
+                border: 1px solid #d1d9e0 !important;
+            }}
+        }}
+
+        /* CODE BOX CONTAINER */
+        .code-container {{
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            overflow: hidden;
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        }}
+        .code-header {{
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 8px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: #8b949e;
+            font-size: 12px;
+        }}
+        .code-dots {{
+            display: flex;
+            gap: 6px;
+        }}
+        .dot {{
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }}
+        .dot.red {{ background: #ff5f56; }}
+        .dot.yellow {{ background: #ffbd2e; }}
+        .dot.green {{ background: #27c93f; }}
+        .copy-btn {{
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            color: #c9d1d9;
+            font-size: 11px;
+            padding: 4px 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }}
+        .copy-btn:hover {{
+            background: rgba(255, 255, 255, 0.15);
+            color: #ffffff;
+        }}
+        .code-body {{
+            padding: 14px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #e6edf3;
+            overflow-x: auto;
+            max-height: 480px;
+            white-space: pre;
+        }}
+
+        /* TOAST ALERT */
+        #toast {{
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #1f2328;
+            color: #ffffff;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            display: none;
+            z-index: 1000;
+        }}
+
+        /* PAGINATION BUTTONS */
+        .page-footer {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 12px;
+        }}
+        .pager-btn {{
+            background: #ffffff;
+            border: 1px solid #d1d9e0;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #0969da;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s;
+        }}
+        .pager-btn:hover {{
+            background: #f6f8fa;
+            border-color: #0969da;
+        }}
+    </style>
+</head>
+<body>
+    <div id="toast"></div>
+
+    <div class="container">
+        <!-- TOP HEADER HERO CARD -->
+        <div class="card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+            <div>
+                <div style="margin-bottom: 6px;">
+                    <span class="badge">Model Diagnostics Report</span>
+                </div>
+                <h1 style="font-size: 22px; font-weight: 800; color: #1f2328;">{sampler.model_name}</h1>
+                {f'<p style="font-size: 13px; font-weight: 500; color: #0969da; margin-top: 2px;">{py_html.escape(model_desc_str)}</p>' if model_desc_str else ''}
+                <p style="font-size: 13px; color: #59636e; margin-top: 2px;">
+                    <strong>{sampler.n_subjects}</strong> Subjects • 
+                    <strong>{len(all_params)}</strong> Parameters • 
+                    <strong>{iterations_run}</strong> Iterations • 
+                    Fit Time: <strong>{fit_duration_text}</strong> ({fit_duration_secs}) • 
+                    Run: <strong>{run_timestamp}</strong>
+                </p>
+            </div>
+            <div style="display: flex; gap: 12px; font-family: monospace;">
+                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
+                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Total Evidence</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #0969da;">{final_evidence_str}</div>
+                </div>
+                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
+                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Final BIC</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #1a7f37;">{final_bic_str}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MULTI-PAGE TAB NAVIGATION BAR -->
+        <nav class="report-navbar no-print">
+            <div class="nav-tabs">
+                <button class="nav-tab active" data-page="page-general-fit" onclick="switchPage('page-general-fit')">
+                    <span class="tab-badge">1</span>
+                    <span>General Fit</span>
+                </button>
+                <button class="nav-tab" data-page="page-parameters" onclick="switchPage('page-parameters')">
+                    <span class="tab-badge">2</span>
+                    <span>Parameters</span>
+                </button>
+                <button class="nav-tab" data-page="page-model-metadata" onclick="switchPage('page-model-metadata')">
+                    <span class="tab-badge">3</span>
+                    <span>Model &amp; Metadata</span>
+                </button>
+            </div>
+            <div class="nav-actions">
+                <button class="action-btn" onclick="window.print()">
+                    🖨️ Print / Save as PDF
+                </button>
+            </div>
+        </nav>
+
+        <!-- ================================================================= -->
+        <!-- PAGE 1: GENERAL FIT                                               -->
+        <!-- ================================================================= -->
+        <div id="page-general-fit" class="report-page active">
+            <div class="card" style="padding: 12px 16px; background: #ffffff; border-left: 4px solid #0969da;">
+                <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Page 1: General Model Fit &amp; Convergence Diagnostics</div>
+                <div style="font-size: 12px; color: #59636e;">Overall population evidence trajectory, BIC minimization path, and subject-level convergence stability.</div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Total Model Evidence &amp; BIC</div>
+                            <div class="card-subtitle">Dual-axis evolution across estimation iterations</div>
+                        </div>
+                    </div>
+                    {div_fit}
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Subject-Level Evidence Trajectories</div>
+                            <div class="card-subtitle">Per-subject log marginal likelihood convergence paths</div>
+                        </div>
+                    </div>
+                    {div_spaghetti}
+                </div>
+            </div>
+
+            <!-- FIT SUMMARY & CONVERGENCE DIAGNOSTICS CARD -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Fit &amp; Convergence Summary</div>
+                        <div class="card-subtitle">Numerical diagnostic metrics at the final estimation iteration</div>
+                    </div>
+                </div>
+                <div class="grid-4" style="font-family: monospace;">
+                    <div style="background: #f6f8fa; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 11px; color: #59636e; text-transform: uppercase;">Total Evidence (LL)</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #0969da; margin-top: 4px;">{final_evidence_str}</div>
+                        <div style="font-size: 10px; color: #8c959f; font-family: sans-serif; margin-top: 2px;">Sum of log-marginal likelihoods</div>
+                    </div>
+                    <div style="background: #f6f8fa; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 11px; color: #59636e; text-transform: uppercase;">Bayesian Information Crit.</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #1a7f37; margin-top: 4px;">{final_bic_str}</div>
+                        <div style="font-size: 10px; color: #8c959f; font-family: sans-serif; margin-top: 2px;">Penalized for {len(all_params)} free parameters</div>
+                    </div>
+                    <div style="background: #f6f8fa; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 11px; color: #59636e; text-transform: uppercase;">Iterations Run</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #1f2328; margin-top: 4px;">{iterations_run} iters</div>
+                        <div style="font-size: 10px; color: #8c959f; font-family: sans-serif; margin-top: 2px;">Duration: {fit_duration_text}</div>
+                    </div>
+                    <div style="background: #f6f8fa; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 11px; color: #59636e; text-transform: uppercase;">Final ΔEvidence (window)</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #8250df; margin-top: 4px;">{sampler.evidence_change[-1]:+.4f}</div>
+                        <div style="font-size: 10px; color: #8c959f; font-family: sans-serif; margin-top: 2px;">Average change per iteration</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGE 1 FOOTER NAVIGATION -->
+            <div class="page-footer no-print">
+                <div></div>
+                <button class="pager-btn" onclick="switchPage('page-parameters')">
+                    Next Page: Parameters &rarr;
+                </button>
+            </div>
+        </div>
+
+        <!-- ================================================================= -->
+        <!-- PAGE 2: PARAMETERS                                                -->
+        <!-- ================================================================= -->
+        <div id="page-parameters" class="report-page">
+            <div class="card" style="padding: 12px 16px; background: #ffffff; border-left: 4px solid #1a7f37;">
+                <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Page 2: Model Parameters &amp; Population Distributions</div>
+                <div style="font-size: 12px; color: #59636e;">Summary table, between-group differences, hyperparameter trajectories, and subject-level posterior estimates.</div>
+            </div>
+
+            <!-- PARAMETERS SUMMARY TABLE -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Model Parameters Summary</div>
+                        <div class="card-subtitle">Fitted population mean and credible ±1 SD intervals ({space_label})</div>
+                    </div>
+                </div>
+                <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Parameter Key</th>
+                                <th>Fitted Mean (μ)</th>
+                                <th>Fitted SD (σ)</th>
+                                <th>±1 SD Credible Bound</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {table_rows_html}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {group_diff_card_html}
+
+            <!-- HYPERPARAMETER EVOLUTION GRID (3 PER ROW) -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Hyperparameter Evolution Grid</div>
+                        <div class="card-subtitle">Dedicated subplots (3 per row). Solid line = population mean; shaded ribbon = ±1 SD</div>
+                    </div>
+                </div>
+                <div class="grid-3">
+                    {evolution_cards_html}
+                </div>
+            </div>
+
+            <!-- INDIVIDUAL SUBJECT POSTERIOR MEANS (3 PER ROW) -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Individual Subject Posterior Means</div>
+                        <div class="card-subtitle">Scatter plots: Y-axis = Subject Number, X-axis = Parameter Posterior Mean</div>
+                    </div>
+                </div>
+                <div class="grid-3">
+                    {subject_cards_html}
+                </div>
+            </div>
+
+            <!-- MULTINORMAL CORRELATION MATRIX HEATMAP -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Multinormal Parameter Correlation Matrix</div>
+                        <div class="card-subtitle">Correlation / covariance between all parameters in latent space</div>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: center;">
+                    <div style="width: 100%; max-width: 600px;">
+                        {div_corr}
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGE 2 FOOTER NAVIGATION -->
+            <div class="page-footer no-print">
+                <button class="pager-btn" onclick="switchPage('page-general-fit')">
+                    &larr; Previous: General Fit
+                </button>
+                <button class="pager-btn" onclick="switchPage('page-model-metadata')">
+                    Next Page: Model &amp; Metadata &rarr;
+                </button>
+            </div>
+        </div>
+
+        <!-- ================================================================= -->
+        <!-- PAGE 3: MODEL & METADATA                                          -->
+        <!-- ================================================================= -->
+        <div id="page-model-metadata" class="report-page">
+            <div class="card" style="padding: 12px 16px; background: #ffffff; border-left: 4px solid #8250df;">
+                <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Page 3: Model Specification &amp; Run Metadata</div>
+                <div style="font-size: 12px; color: #59636e;">Source code of the computational model, execution timestamps, duration, and companion metadata file contents.</div>
+            </div>
+
+            <!-- MODEL DESCRIPTION CARD (IF AVAILABLE) -->
+            {f'''<div class="card" style="padding: 14px 18px; background: rgba(9, 105, 218, 0.03); border-left: 4px solid #0969da;">
+                <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #0969da; margin-bottom: 3px;">Model Description</div>
+                <div style="font-size: 13px; color: #1f2328; font-weight: 500;">{py_html.escape(model_desc_str)}</div>
+            </div>''' if model_desc_str else ''}
+
+            <!-- METADATA CARDS GRID -->
+            <div class="grid-4">
+                <div class="card" style="padding: 16px;">
+                    <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #59636e; margin-bottom: 8px;">
+                        🕒 Timestamps
+                    </div>
+                    <div style="font-size: 12px; line-height: 1.7; font-family: monospace;">
+                        <div><span style="color: #8c959f;">Run At:</span> <strong>{run_timestamp}</strong></div>
+                        <div><span style="color: #8c959f;">Created:</span> {created_timestamp}</div>
+                        <div><span style="color: #8c959f;">Saved:</span> {metadata.get("saved_at", run_timestamp)}</div>
+                    </div>
+                </div>
+
+                <div class="card" style="padding: 16px;">
+                    <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #59636e; margin-bottom: 8px;">
+                        ⏱️ Execution Time
+                    </div>
+                    <div style="font-size: 12px; line-height: 1.7; font-family: monospace;">
+                        <div><span style="color: #8c959f;">Total Duration:</span> <strong style="color: #0969da;">{fit_duration_text}</strong></div>
+                        <div><span style="color: #8c959f;">Exact Seconds:</span> {fit_duration_secs}</div>
+                        <div><span style="color: #8c959f;">Iterations:</span> <strong>{iterations_run}</strong> completed</div>
+                    </div>
+                </div>
+
+                <div class="card" style="padding: 16px;">
+                    <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #59636e; margin-bottom: 8px;">
+                        👥 Model Dimensions
+                    </div>
+                    <div style="font-size: 12px; line-height: 1.7; font-family: monospace;">
+                        <div><span style="color: #8c959f;">Subjects:</span> <strong>{sampler.n_subjects}</strong> subjects</div>
+                        <div><span style="color: #8c959f;">Parameters:</span> <strong>{len(all_params)}</strong> ({", ".join(all_params)})</div>
+                        <div><span style="color: #8c959f;">Multinormal:</span> {str(sampler.multinormal)}</div>
+                    </div>
+                </div>
+
+                <div class="card" style="padding: 16px;">
+                    <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #59636e; margin-bottom: 8px;">
+                        ⚙️ System &amp; Env
+                    </div>
+                    <div style="font-size: 12px; line-height: 1.7; font-family: monospace;">
+                        <div><span style="color: #8c959f;">Python:</span> {metadata.get('system_info', {}).get('python_version', '3.x')}</div>
+                        <div><span style="color: #8c959f;">Platform:</span> {metadata.get('system_info', {}).get('platform', 'Linux/macOS/Windows').split('-')[0]}</div>
+                        <div><span style="color: #8c959f;">Choices:</span> {sampler.n_choices} per decision</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MODEL CODE PRESENTATION CARD -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Model Source Code</div>
+                        <div class="card-subtitle">Exact Python callable invoked during log-likelihood evaluation and simulation ({code_lines} lines)</div>
+                    </div>
+                    <div class="no-print">
+                        <button class="action-btn" onclick="copyModelCode()">📋 Copy Python Code</button>
+                    </div>
+                </div>
+                <div class="code-container">
+                    <div class="code-header">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="code-dots">
+                                <span class="dot red"></span>
+                                <span class="dot yellow"></span>
+                                <span class="dot green"></span>
+                            </div>
+                            <span style="color: #c9d1d9; font-weight: 600;">{getattr(sampler.model, '__name__', 'model')}.py</span>
+                        </div>
+                        <span style="font-size: 11px; color: #8b949e;">Python • {code_lines} lines</span>
+                    </div>
+                    <pre class="code-body"><code id="model-code-block">{escaped_code}</code></pre>
+                </div>
+            </div>
+
+            <!-- MODEL METADATA JSON FILE CARD -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Companion Metadata JSON File</div>
+                        <div class="card-subtitle">Stored alongside the model pickle file as <code>{sampler.model_name}_metadata.json</code> and inside the pickle as <code>sampler.metadata</code></div>
+                    </div>
+                    <div style="display: flex; gap: 8px;" class="no-print">
+                        <button class="action-btn" onclick="copyMetadataJson()">📋 Copy JSON</button>
+                        <button class="action-btn" onclick="downloadMetadataJson('{sampler.model_name}_metadata.json')">💾 Download JSON File</button>
+                    </div>
+                </div>
+                <div class="code-container">
+                    <div class="code-header">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="code-dots">
+                                <span class="dot red"></span>
+                                <span class="dot yellow"></span>
+                                <span class="dot green"></span>
+                            </div>
+                            <span style="color: #c9d1d9; font-weight: 600;">{sampler.model_name}_metadata.json</span>
+                        </div>
+                        <span style="font-size: 11px; color: #8b949e;">JSON Format</span>
+                    </div>
+                    <pre class="code-body"><code id="metadata-json-block">{escaped_json}</code></pre>
+                </div>
+            </div>
+
+            <!-- PAGE 3 FOOTER NAVIGATION -->
+            <div class="page-footer no-print">
+                <button class="pager-btn" onclick="switchPage('page-parameters')">
+                    &larr; Previous Page: Parameters
+                </button>
+                <div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchPage(pageId) {{
+            document.querySelectorAll('.report-page').forEach(function(el) {{
+                el.classList.remove('active');
+            }});
+            document.querySelectorAll('.nav-tab').forEach(function(el) {{
+                el.classList.remove('active');
+            }});
+            var target = document.getElementById(pageId);
+            if (target) {{
+                target.classList.add('active');
+            }}
+            var tab = document.querySelector('[data-page="' + pageId + '"]');
+            if (tab) {{
+                tab.classList.add('active');
+            }}
+            window.location.hash = pageId;
+            setTimeout(function() {{
+                window.dispatchEvent(new Event('resize'));
+            }}, 60);
+            window.scrollTo({{ top: 0, behavior: 'smooth' }});
+        }}
+
+        function copyModelCode() {{
+            var el = document.getElementById('model-code-block');
+            if (!el) return;
+            navigator.clipboard.writeText(el.innerText).then(function() {{
+                showToast('✅ Model source code copied to clipboard!');
+            }}).catch(function() {{
+                showToast('Failed to copy to clipboard.');
+            }});
+        }}
+
+        function copyMetadataJson() {{
+            var el = document.getElementById('metadata-json-block');
+            if (!el) return;
+            navigator.clipboard.writeText(el.innerText).then(function() {{
+                showToast('✅ Metadata JSON copied to clipboard!');
+            }}).catch(function() {{
+                showToast('Failed to copy to clipboard.');
+            }});
+        }}
+
+        function downloadMetadataJson(filename) {{
+            var el = document.getElementById('metadata-json-block');
+            if (!el) return;
+            var blob = new Blob([el.innerText], {{ type: 'application/json' }});
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('💾 Saved ' + filename);
+        }}
+
+        function showToast(msg) {{
+            var toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.innerText = msg;
+            toast.style.display = 'block';
+            setTimeout(function() {{
+                toast.style.display = 'none';
+            }}, 2400);
+        }}
+
+        window.addEventListener('DOMContentLoaded', function() {{
+            var hash = window.location.hash ? window.location.hash.substring(1) : '';
+            if (hash && document.getElementById(hash)) {{
+                switchPage(hash);
+            }}
+        }});
+    </script>
+</body>
+</html>
+"""
+
+    dashboard = ReportDashboard(html_content, filename=filename, figure=fig_fit)
+
+    if filename:
+        dashboard.save(filename)
+
+    if show:
+        if _is_notebook():
+            try:
+                import html
+                from IPython.display import HTML, display
+                escaped = html.escape(html_content, quote=True)
+                iframe_html = (
+                    f'<iframe srcdoc="{escaped}" '
+                    f'style="width: 100%; height: 860px; border: 1px solid #d1d9e0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" '
+                    f'frameborder="0"></iframe>'
+                )
+                display(HTML(iframe_html))
+            except Exception:
+                dashboard.show()
+        else:
+            dashboard.show()
+
+    return dashboard
+
+
+# -----------------------------------------------------------------------------
+# Multi-Model Comparison Report
+# -----------------------------------------------------------------------------
+
+
+def compare_models(
+    samplers: Union[Sequence["Sampler"], Dict[str, "Sampler"]],
+    filename: Optional[str] = None,
+    show: bool = True,
+    compare_params: Optional[Sequence[str]] = None,
+    transformed: bool = True,
+    renderer: Optional[str] = None,
+) -> ReportDashboard:
+    """Compare multiple computational models across Likelihood/BICs, Parameter Inclusion, and Parameter Evolutions.
+
+    Multi-Page Interactive Dashboard:
+    - Page 1: Fit & BICs (Total evidence and BIC evolution, final ranking table, and % of participants best explained).
+    - Page 2: Parameter Matrix & Code (Parameters on y-axis, models on x-axis, and collapsible model source code viewer).
+    - Page 3: Parameter Evolution Comparison (Compares all parameters by default, plotting shared parameters together on the same subplots).
+
+    Parameters
+    ----------
+    samplers : Union[Sequence[Sampler], Dict[str, Sampler]]
+        Two or more fitted Sampler instances.
+    filename : Optional[str], default=None
+        If provided, saves as a self-contained HTML file.
+    show : bool, default=True
+        Whether to display the interactive figure or open in browser.
+    compare_params : Optional[Sequence[str]], default=None
+        List of parameter keys to compare. Defaults to ALL unique parameters across all compared models.
+    transformed : bool, default=True
+        If True, displays parameters in their valid domain space. If False, displays latent normal values.
+    renderer : Optional[str], default=None
+        Plotly renderer option.
+
+    Returns
+    -------
+    ReportDashboard
+        A dashboard object with `.save()`, `.show()`, and notebook rendering.
+    """
+    try:
+        import plotly.graph_objects as go
+        from plotly.io import to_html
+    except ImportError as exc:
+        raise ImportError(
+            "Plotly is required for model comparison reports. Install it via: pip install plotly"
+        ) from exc
+
+    import html as py_html
+    import json
+    import inspect
+
+    if isinstance(samplers, dict):
+        model_dict = samplers
+    else:
+        model_dict = {}
+        for s in samplers:
+            name = getattr(s, "model_name", None) or f"Model_{len(model_dict) + 1}"
+            model_dict[name] = s
+
+    if len(model_dict) < 2:
+        raise ValueError("compare_models requires at least two fitted Sampler instances.")
+
+    model_names = list(model_dict.keys())
+    palette = [
+        "#0969da",
+        "#1a7f37",
+        "#8250df",
+        "#cf222e",
+        "#bf8700",
+        "#0550ae",
+        "#116329",
+        "#5a32a3",
+        "#82071e",
+        "#7d4e00",
+    ]
+    model_colors = {name: palette[i % len(palette)] for i, name in enumerate(model_names)}
+
+    plotly_config = {
+        "responsive": True,
+        "displayModeBar": True,
+        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        "displaylogo": False,
+    }
+
+    # Collect all unique parameters across all models
+    all_unique_params: List[str] = []
+    for name in model_names:
+        for p in model_dict[name].params:
+            if p not in all_unique_params:
+                all_unique_params.append(p)
+
+    # Extract short model descriptions
+    model_descriptions: Dict[str, str] = {}
+    for name in model_names:
+        s = model_dict[name]
+        desc = getattr(s, "description", "")
+        if not desc and hasattr(s, "metadata") and isinstance(s.metadata, dict):
+            desc = s.metadata.get("description", "")
+        model_descriptions[name] = desc or f"Model {name}"
+
+    active_params = [p for p in compare_params if p in all_unique_params] if compare_params else all_unique_params
+
+    # Model evaluation metrics
+    final_evidence: List[float] = []
+    final_bic: List[float] = []
+    n_params_list: List[int] = []
+
+    for name in model_names:
+        m = model_dict[name]
+        ev = m.evidence[-1] if m.evidence else np.nan
+        bic = m.BIC[-1] if m.BIC else np.nan
+        final_evidence.append(ev)
+        final_bic.append(bic)
+        n_params_list.append(len(m.params))
+
+    valid_bics = [b for b in final_bic if not np.isnan(b)]
+    best_bic = min(valid_bics) if valid_bics else 0.0
+    delta_bic = [b - best_bic if not np.isnan(b) else np.nan for b in final_bic]
+
+    sorted_indices = sorted(
+        range(len(model_names)),
+        key=lambda i: final_bic[i] if not np.isnan(final_bic[i]) else float("inf"),
+    )
+    ranks = [0] * len(model_names)
+    for rank, idx in enumerate(sorted_indices, start=1):
+        ranks[idx] = rank
+
+    # -------------------------------------------------------------------------
+    # Participant-level Best-fit Breakdown (% Explained by each model)
+    # -------------------------------------------------------------------------
+    first_sampler = next(iter(model_dict.values()))
+    n_subjects = getattr(first_sampler, "n_subjects", 0)
+    subj_wins: Dict[str, int] = {m: 0 for m in model_names}
+    has_subj_evidence = n_subjects > 0
+
+    if has_subj_evidence:
+        for s in range(n_subjects):
+            best_m = None
+            best_s_ev = -float("inf")
+            for m_name in model_names:
+                m_obj = model_dict[m_name]
+                if hasattr(m_obj, "subj_evidence") and m_obj.subj_evidence and len(m_obj.subj_evidence[-1]) > s:
+                    val = m_obj.subj_evidence[-1][s]
+                    if val > best_s_ev:
+                        best_s_ev = val
+                        best_m = m_name
+            if best_m is not None:
+                subj_wins[best_m] += 1
+            else:
+                has_subj_evidence = False
+                break
+
+    subj_win_pct = {
+        m: (subj_wins[m] / n_subjects * 100.0) if n_subjects > 0 else 0.0
+        for m in model_names
+    }
+
+    # -------------------------------------------------------------------------
+    # PAGE 1: Evidence & BIC Evolution + Participant Breakdown Plots
+    # -------------------------------------------------------------------------
+    fig_ev = go.Figure()
+    for name in model_names:
+        m = model_dict[name]
+        fig_ev.add_trace(
+            go.Scatter(
+                x=list(range(len(m.evidence))),
+                y=m.evidence,
+                mode="lines+markers",
+                name=name,
+                line=dict(color=model_colors[name], width=2.5),
+                marker=dict(size=4),
+                hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: Ev = %{{y:.2f}}<extra></extra>",
+            )
+        )
+    fig_ev.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=50, r=20, t=20, b=40),
+        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+        yaxis=dict(title="Total Evidence (LL)", gridcolor="#eaeef2"),
+        legend=dict(orientation="h", y=1.12, x=0.01),
+        hovermode="x unified",
+    )
+    div_ev = to_html(fig_ev, include_plotlyjs=False, full_html=False, config=plotly_config)
+
+    fig_bic = go.Figure()
+    for name in model_names:
+        m = model_dict[name]
+        if m.BIC:
+            fig_bic.add_trace(
+                go.Scatter(
+                    x=list(range(len(m.BIC))),
+                    y=m.BIC,
+                    mode="lines+markers",
+                    name=name,
+                    line=dict(color=model_colors[name], width=2.5, dash="dash"),
+                    marker=dict(size=4),
+                    hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: BIC = %{{y:.2f}}<extra></extra>",
+                )
+            )
+    fig_bic.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=50, r=20, t=20, b=40),
+        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+        yaxis=dict(title="BIC (Lower is Better)", gridcolor="#eaeef2"),
+        legend=dict(orientation="h", y=1.12, x=0.01),
+        hovermode="x unified",
+    )
+    div_bic = to_html(fig_bic, include_plotlyjs=False, full_html=False, config=plotly_config)
+
+    # Best Explained Participants Horizontal Bar Chart
+    fig_subj_bar = go.Figure()
+    sorted_by_pct = sorted(model_names, key=lambda m: subj_win_pct[m], reverse=True)
+    fig_subj_bar.add_trace(
+        go.Bar(
+            y=sorted_by_pct,
+            x=[subj_win_pct[m] for m in sorted_by_pct],
+            orientation="h",
+            marker=dict(color=[model_colors[m] for m in sorted_by_pct]),
+            text=[f"{subj_win_pct[m]:.1f}% ({subj_wins[m]}/{n_subjects} subj)" for m in sorted_by_pct],
+            textposition="auto",
+            hovertemplate="<b>%{y}</b><br>Best explained: %{x:.1f}% of participants<extra></extra>",
+        )
+    )
+    fig_subj_bar.update_layout(
+        template="plotly_white",
+        height=280,
+        margin=dict(l=90, r=20, t=20, b=40),
+        xaxis=dict(title="% of Participants Best Explained", range=[0, 105], gridcolor="#eaeef2"),
+        yaxis=dict(title="", autorange="reversed", gridcolor="#eaeef2"),
+    )
+    div_subj_bar = to_html(fig_subj_bar, include_plotlyjs=False, full_html=False, config=plotly_config)
+
+    # Comparison Ranking Table Rows
+    # Comparison Ranking Table Rows (with Model Description)
+    comp_rows_html = ""
+    for idx in sorted_indices:
+        m_name = model_names[idx]
+        is_winner = ranks[idx] == 1
+        d_bic = delta_bic[idx]
+        d_bic_str = "0.0 (Best)" if is_winner else f"+{d_bic:.2f}"
+        badge_style = "background: #1a7f37; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 700;" if is_winner else "color: #59636e;"
+        pct_display = f"{subj_win_pct[m_name]:.1f}% ({subj_wins[m_name]}/{n_subjects})" if has_subj_evidence else "N/A"
+        m_desc = model_descriptions.get(m_name, "")
+
+        comp_rows_html += f"""
+        <tr style="border-bottom: 1px solid #eaeef2; {'background: rgba(26, 127, 55, 0.04);' if is_winner else ''}">
+            <td style="padding: 10px 14px;"><span style="{badge_style}">#{ranks[idx]}</span></td>
+            <td style="padding: 10px 14px; font-weight: 700; font-family: monospace;">
+                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: {model_colors[m_name]}; margin-right: 6px;"></span>
+                {m_name}
+            </td>
+            <td style="padding: 10px 14px; color: #59636e; font-size: 11px; max-width: 200px; line-height: 1.3;">
+                {py_html.escape(m_desc)}
+            </td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{n_params_list[idx]}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #0969da;">{final_evidence[idx]:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; font-weight: 700;">{final_bic[idx]:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: {'#1a7f37' if is_winner else '#cf222e'}; font-weight: 600;">{d_bic_str}</td>
+            <td style="padding: 10px 14px; font-family: monospace; font-weight: 600; color: #8250df;">{pct_display}</td>
+        </tr>
+        """
+
+    # -------------------------------------------------------------------------
+    # PAGE 2: Parameter Inclusion Matrix Table & Collapsible Model Functions Code
+    # -------------------------------------------------------------------------
+    # Model description summary cards for Page 2
+    model_desc_cards_html = "".join([
+        f"""
+        <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 14px; flex: 1 1 200px; min-width: 190px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-weight: 700; font-family: monospace; font-size: 12px; color: #1f2328; display: flex; align-items: center; gap: 6px;">
+                    <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: {model_colors[name]};"></span>
+                    {name}
+                </span>
+                <span style="font-size: 10px; color: #59636e; font-family: monospace; font-weight: 600;">k={len(model_dict[name].params)}</span>
+            </div>
+            <div style="font-size: 11px; color: #59636e; line-height: 1.35;">
+                {py_html.escape(model_descriptions.get(name, ""))}
+            </div>
+        </div>
+        """
+        for name in model_names
+    ])
+
+    matrix_header_html = "".join([
+        f"""<th style="text-align: center; padding: 10px 14px;">
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;">
+                <span style="color: {model_colors[name]}; font-family: monospace; font-weight: 700;">{name}</span>
+                <span style="font-size: 10px; color: #59636e; font-weight: normal; max-width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{py_html.escape(model_descriptions.get(name, ''))}">{py_html.escape(model_descriptions.get(name, ''))}</span>
+            </div>
+        </th>"""
+        for name in model_names
+    ])
+
+    # Simplistic matrix table: filled squares representing the parameters, no text in cells
+    matrix_rows_html = ""
+    for p in all_unique_params:
+        cells_html = ""
+        for name in model_names:
+            m = model_dict[name]
+            if p in m.params:
+                cells_html += f"""
+                <td style="padding: 10px 14px; text-align: center; vertical-align: middle;">
+                    <span style="display: inline-block; width: 22px; height: 22px; border-radius: 4px; background: {model_colors[name]}; box-shadow: 0 1px 2px rgba(0,0,0,0.12);" title="{name} includes {p}"></span>
+                </td>
+                """
+            else:
+                cells_html += f"""
+                <td style="padding: 10px 14px; text-align: center; vertical-align: middle;">
+                    <span style="display: inline-block; width: 22px; height: 22px; border-radius: 4px; border: 1.5px dashed #d1d9e0; background: rgba(246, 248, 250, 0.6);" title="{name} does not include {p}"></span>
+                </td>
+                """
+
+        # Row highlighting if shared vs specific
+        models_with_p = [name for name in model_names if p in model_dict[name].params]
+        shared_badge = (
+            f'<span style="background: rgba(130, 80, 223, 0.1); color: #8250df; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 6px;">Shared ({len(models_with_p)})</span>'
+            if len(models_with_p) > 1
+            else f'<span style="background: #eaeef2; color: #59636e; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 6px;">Unique</span>'
+        )
+
+        matrix_rows_html += f"""
+        <tr style="border-bottom: 1px solid #eaeef2;">
+            <td style="padding: 10px 14px; font-weight: 700; font-family: monospace;">
+                {p} {shared_badge}
+            </td>
+            {cells_html}
+        </tr>
+        """
+
+    # Footer row for parameter counts
+    matrix_footer_html = "".join([
+        f'<td style="padding: 10px 14px; text-align: center; font-weight: 700; font-family: monospace; color: {model_colors[name]};">k = {len(model_dict[name].params)}</td>'
+        for name in model_names
+    ])
+
+    # Model source codes for collapsible viewer
+    model_source_codes: Dict[str, str] = {}
+    for name in model_names:
+        m = model_dict[name]
+        code_str = getattr(m, "model_code", "")
+        if not code_str and hasattr(m, "model"):
+            try:
+                code_str = inspect.getsource(m.model)
+            except Exception:
+                code_str = getattr(m.model, "__doc__", "") or str(m.model)
+        model_source_codes[name] = code_str.strip() or f"# No source code available for model {name}"
+
+    model_code_tabs_html = "".join([
+        f"""
+        <button class="code-tab {'active' if idx == 0 else ''}" data-code-model="{name}" onclick="showModelCode('{name}')" style="border-bottom: 2px solid {'#0969da' if idx == 0 else 'transparent'};">
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: {model_colors[name]}; margin-right: 6px;"></span>
+            {name}
+        </button>
+        """
+        for idx, name in enumerate(model_names)
+    ])
+
+    model_code_blocks_html = "".join([
+        f"""
+        <div id="code-panel-{name}" class="code-panel {'active' if idx == 0 else ''}" style="display: {'block' if idx == 0 else 'none'};">
+            <div class="code-header" style="background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="display: flex; gap: 6px;">
+                        <span style="width: 10px; height: 10px; border-radius: 50%; background: #ff5f56; display: inline-block;"></span>
+                        <span style="width: 10px; height: 10px; border-radius: 50%; background: #ffbd2e; display: inline-block;"></span>
+                        <span style="width: 10px; height: 10px; border-radius: 50%; background: #27c93f; display: inline-block;"></span>
+                    </div>
+                    <span style="color: #c9d1d9; font-weight: 600; font-size: 12px; font-family: monospace;">{name}.py</span>
+                </div>
+                <button class="action-btn" onclick="copySpecificCode('{name}')" style="font-size: 11px; padding: 4px 8px;">📋 Copy Code</button>
+            </div>
+            <pre class="code-body" style="padding: 14px; font-size: 12px; line-height: 1.6; color: #e6edf3; overflow-x: auto; max-height: 380px; margin: 0; background: #0d1117;"><code id="code-content-{name}">{py_html.escape(model_source_codes[name])}</code></pre>
+        </div>
+        """
+        for idx, name in enumerate(model_names)
+    ])
+
+    # -------------------------------------------------------------------------
+    # PAGE 3: Parameter Evolution Comparison Plots
+    # Shared parameters are plotted together on the same plot!
+    # Unique parameters are plotted on their own plot.
+    # -------------------------------------------------------------------------
+    evolution_comparison_cards = ""
+    for p in active_params:
+        p_models = [name for name in model_names if p in model_dict[name].params]
+        is_shared = len(p_models) > 1
+
+        fig_p = go.Figure()
+        for m_name in p_models:
+            m = model_dict[m_name]
+            p_history = m.hyper_params_list
+            t_func = m.transformations.get(p, lambda x: x) if transformed else (lambda x: x)
+
+            p_iters = list(range(len(p_history)))
+            p_raw_means = [h[p]["mean"] for h in p_history]
+            p_sds = [h[p]["sd"] for h in p_history]
+
+            try:
+                p_trans_means = [float(t_func(np.array([mu]))[0]) for mu in p_raw_means]
+                p_upper = [float(t_func(np.array([mu + sd]))[0]) for mu, sd in zip(p_raw_means, p_sds)]
+                p_lower = [float(t_func(np.array([mu - sd]))[0]) for mu, sd in zip(p_raw_means, p_sds)]
+            except Exception:
+                p_trans_means = p_raw_means
+                p_upper = [mu + sd for mu, sd in zip(p_raw_means, p_sds)]
+                p_lower = [mu - sd for mu, sd in zip(p_raw_means, p_sds)]
+
+            c_hex = model_colors[m_name]
+            # Shaded ribbon
+            fig_p.add_trace(
+                go.Scatter(
+                    x=p_iters + p_iters[::-1],
+                    y=p_upper + p_lower[::-1],
+                    fill="toself",
+                    fillcolor=f"rgba({int(c_hex[1:3], 16)}, {int(c_hex[3:5], 16)}, {int(c_hex[5:7], 16)}, 0.12)",
+                    line=dict(color="rgba(255,255,255,0)"),
+                    hoverinfo="skip",
+                    showlegend=False,
+                    name=f"{m_name} ±1 SD",
+                )
+            )
+            # Mean line
+            fig_p.add_trace(
+                go.Scatter(
+                    x=p_iters,
+                    y=p_trans_means,
+                    mode="lines+markers",
+                    name=m_name,
+                    line=dict(color=c_hex, width=2.5),
+                    marker=dict(size=4),
+                    hovertemplate=f"<b>{m_name}</b><br>Iter %{{x}}: mean = %{{y:.4f}}<extra></extra>",
+                )
+            )
+
+        space_str = "Transformed Domain" if transformed else "Latent Space"
+        fig_p.update_layout(
+            template="plotly_white",
+            height=260,
+            margin=dict(l=45, r=15, t=15, b=35),
+            xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
+            yaxis=dict(title=f"{p} Value", gridcolor="#eaeef2"),
+            legend=dict(orientation="h", y=1.14, x=0.01),
+            hovermode="x unified",
+        )
+        div_p = to_html(fig_p, include_plotlyjs=False, full_html=False, config=plotly_config)
+
+        badge_html = (
+            f'<span style="background: rgba(130, 80, 223, 0.1); color: #8250df; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;">Shared ({len(p_models)} models)</span>'
+            if is_shared
+            else f'<span style="background: #eaeef2; color: #59636e; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;">Specific to {p_models[0]}</span>'
+        )
+
+        evolution_comparison_cards += f"""
+        <div style="background: #ffffff; border: 1px solid #eaeef2; border-radius: 8px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <div style="font-weight: 700; font-family: monospace; font-size: 14px; color: #1f2328;">
+                    {p}
+                </div>
+                {badge_html}
+            </div>
+            <div style="font-size: 11px; color: #59636e; margin-bottom: 4px;">
+                {'Compared across: ' + ', '.join(p_models) if is_shared else 'Unique parameter in ' + p_models[0]} ({space_str})
+            </div>
+            {div_p}
+        </div>
+        """
+
+    # -------------------------------------------------------------------------
+    # Multi-Page HTML Document Assembly
+    # -------------------------------------------------------------------------
+    comp_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Comparison Report: {len(model_names)} Models</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f6f8fa;
+            color: #1f2328;
+            padding: 24px;
+            line-height: 1.5;
+        }}
+        .container {{
+            max-width: 1160px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }}
         .card {{
             background: #ffffff;
@@ -678,16 +1952,6 @@ def create_report(
             .grid-2 {{ grid-template-columns: 1fr; }}
             .grid-3 {{ grid-template-columns: 1fr; }}
         }}
-        .badge {{
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 600;
-            background: rgba(9, 105, 218, 0.1);
-            color: #0969da;
-            border: 1px solid rgba(9, 105, 218, 0.2);
-        }}
         table {{
             width: 100%;
             border-collapse: collapse;
@@ -701,465 +1965,144 @@ def create_report(
             padding: 10px 14px;
             border-bottom: 1px solid #d1d9e0;
         }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <!-- 1. HEADER HERO CARD -->
-        <div class="card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
-            <div>
-                <div style="margin-bottom: 6px;">
-                    <span class="badge">Model Diagnostics Report</span>
-                </div>
-                <h1 style="font-size: 22px; font-weight: 800; color: #1f2328;">{sampler.model_name}</h1>
-                <p style="font-size: 13px; color: #59636e; margin-top: 2px;">
-                    <strong>{sampler.n_subjects}</strong> Subjects • 
-                    <strong>{len(all_params)}</strong> Parameters • 
-                    <strong>{sampler.iterations}</strong> Iterations • 
-                    Fit Time: {sampler.total_fit_time:.2f}s
-                </p>
-            </div>
-            <div style="display: flex; gap: 12px; font-family: monospace;">
-                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
-                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Total Evidence</div>
-                    <div style="font-size: 18px; font-weight: 700; color: #0969da;">{final_evidence_str}</div>
-                </div>
-                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
-                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Final BIC</div>
-                    <div style="font-size: 18px; font-weight: 700; color: #1a7f37;">{final_bic_str}</div>
-                </div>
-            </div>
-        </div>
 
-        <!-- 2. MODEL FIT: EVIDENCE & BIC + SUBJECT SPAGHETTI -->
-        <div class="grid-2">
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">Total Model Evidence &amp; BIC</div>
-                        <div class="card-subtitle">Dual-axis evolution across estimation iterations</div>
-                    </div>
-                </div>
-                {div_fit}
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">Subject-Level Evidence Trajectories</div>
-                        <div class="card-subtitle">Per-subject log marginal likelihood convergence paths</div>
-                    </div>
-                </div>
-                {div_spaghetti}
-            </div>
-        </div>
-
-        <!-- 3. PARAMETERS SUMMARY TABLE -->
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">Model Parameters Summary</div>
-                    <div class="card-subtitle">Fitted population mean and credible ±1 SD intervals ({space_label})</div>
-                </div>
-            </div>
-            <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Parameter Key</th>
-                            <th>Fitted Mean (μ)</th>
-                            <th>Fitted SD (σ)</th>
-                            <th>±1 SD Credible Bound</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {table_rows_html}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        {group_diff_card_html}
-
-        <!-- 4. HYPERPARAMETER EVOLUTION GRID (3 PER ROW) -->
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">Hyperparameter Evolution Grid</div>
-                    <div class="card-subtitle">Dedicated subplots (3 per row). Solid line = population mean; shaded ribbon = ±1 SD</div>
-                </div>
-            </div>
-            <div class="grid-3">
-                {evolution_cards_html}
-            </div>
-        </div>
-
-        <!-- 5. INDIVIDUAL SUBJECT POSTERIOR MEANS (3 PER ROW) -->
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">Individual Subject Posterior Means</div>
-                    <div class="card-subtitle">Scatter plots: Y-axis = Subject Number, X-axis = Parameter Posterior Mean</div>
-                </div>
-            </div>
-            <div class="grid-3">
-                {subject_cards_html}
-            </div>
-        </div>
-
-        <!-- 6. MULTINORMAL CORRELATION MATRIX HEATMAP -->
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">Multinormal Parameter Correlation Matrix</div>
-                    <div class="card-subtitle">Correlation / covariance between all parameters in latent space</div>
-                </div>
-            </div>
-            <div style="display: flex; justify-content: center;">
-                <div style="width: 100%; max-width: 600px;">
-                    {div_corr}
-                </div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-"""
-
-    dashboard = ReportDashboard(html_content, filename=filename, figure=fig_fit)
-
-    if filename:
-        dashboard.save(filename)
-
-    if show:
-        if _is_notebook():
-            try:
-                import html
-                from IPython.display import HTML, display
-                escaped = html.escape(html_content, quote=True)
-                iframe_html = (
-                    f'<iframe srcdoc="{escaped}" '
-                    f'style="width: 100%; height: 860px; border: 1px solid #d1d9e0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" '
-                    f'frameborder="0"></iframe>'
-                )
-                display(HTML(iframe_html))
-            except Exception:
-                dashboard.show()
-        else:
-            dashboard.show()
-
-    return dashboard
-
-
-# -----------------------------------------------------------------------------
-# Multi-Model Comparison Report
-# -----------------------------------------------------------------------------
-
-
-def compare_models(
-    samplers: Union[Sequence["Sampler"], Dict[str, "Sampler"]],
-    filename: Optional[str] = None,
-    show: bool = True,
-    compare_params: Optional[Sequence[str]] = None,
-    renderer: Optional[str] = None,
-) -> ReportDashboard:
-    """Compare multiple computational models on likelihood (evidence), BIC, and parameters.
-
-    Visualizes:
-    1. Evolution Trajectories: Total Evidence and BIC across iterations for all models.
-    2. Final Fit Comparison: Side-by-side grouped bar chart and ranking table with ΔBIC.
-    3. Parameter Comparison: Dedicated visual comparison across models.
-
-    Parameters
-    ----------
-    samplers : Union[Sequence[Sampler], Dict[str, Sampler]]
-        Two or more fitted Sampler instances.
-    filename : Optional[str], default=None
-        If provided, saves as a self-contained HTML file.
-    show : bool, default=True
-        Whether to display the interactive figure or open in browser.
-    compare_params : Optional[Sequence[str]], default=None
-        List of parameter keys to compare across models.
-    renderer : Optional[str], default=None
-        Plotly renderer option.
-
-    Returns
-    -------
-    ReportDashboard
-        A dashboard object with `.save()`, `.show()`, and notebook rendering.
-    """
-    try:
-        import plotly.graph_objects as go
-        from plotly.io import to_html
-    except ImportError as exc:
-        raise ImportError(
-            "Plotly is required for model comparison reports. Install it via: pip install plotly"
-        ) from exc
-
-    if isinstance(samplers, dict):
-        model_dict = samplers
-    else:
-        model_dict = {}
-        for s in samplers:
-            name = getattr(s, "model_name", None) or f"Model_{len(model_dict) + 1}"
-            model_dict[name] = s
-
-    if len(model_dict) < 2:
-        raise ValueError("compare_models requires at least two fitted Sampler instances.")
-
-    model_names = list(model_dict.keys())
-    palette = [
-        "#0969da",
-        "#1a7f37",
-        "#8250df",
-        "#cf222e",
-        "#bf8700",
-        "#0550ae",
-        "#116329",
-        "#5a32a3",
-        "#82071e",
-        "#7d4e00",
-    ]
-
-    plotly_config = {
-        "responsive": True,
-        "displayModeBar": True,
-        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-        "displaylogo": False,
-    }
-
-    final_evidence: List[float] = []
-    final_bic: List[float] = []
-    n_params_list: List[int] = []
-
-    for name in model_names:
-        m = model_dict[name]
-        ev = m.evidence[-1] if m.evidence else np.nan
-        bic = m.BIC[-1] if m.BIC else np.nan
-        final_evidence.append(ev)
-        final_bic.append(bic)
-        n_params_list.append(len(m.params))
-
-    valid_bics = [b for b in final_bic if not np.isnan(b)]
-    best_bic = min(valid_bics) if valid_bics else 0.0
-    delta_bic = [b - best_bic if not np.isnan(b) else np.nan for b in final_bic]
-
-    sorted_indices = sorted(
-        range(len(model_names)),
-        key=lambda i: final_bic[i] if not np.isnan(final_bic[i]) else float("inf"),
-    )
-    ranks = [0] * len(model_names)
-    for rank, idx in enumerate(sorted_indices, start=1):
-        ranks[idx] = rank
-
-    # 1. Total Evidence Evolution Plot
-    fig_ev = go.Figure()
-    for idx, name in enumerate(model_names):
-        m = model_dict[name]
-        fig_ev.add_trace(
-            go.Scatter(
-                x=list(range(len(m.evidence))),
-                y=m.evidence,
-                mode="lines+markers",
-                name=name,
-                line=dict(color=palette[idx % len(palette)], width=2.5),
-                marker=dict(size=4),
-                hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: Ev = %{{y:.2f}}<extra></extra>",
-            )
-        )
-    fig_ev.update_layout(
-        template="plotly_white",
-        height=280,
-        margin=dict(l=50, r=20, t=20, b=40),
-        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
-        yaxis=dict(title="Total Evidence", gridcolor="#eaeef2"),
-        legend=dict(orientation="h", y=1.08, x=0.02),
-        hovermode="x unified",
-    )
-    div_ev = to_html(fig_ev, include_plotlyjs=False, full_html=False, config=plotly_config)
-
-    # 2. BIC Evolution Plot
-    fig_bic = go.Figure()
-    for idx, name in enumerate(model_names):
-        m = model_dict[name]
-        if m.BIC:
-            fig_bic.add_trace(
-                go.Scatter(
-                    x=list(range(len(m.BIC))),
-                    y=m.BIC,
-                    mode="lines+markers",
-                    name=name,
-                    line=dict(color=palette[idx % len(palette)], width=2.5, dash="dash"),
-                    marker=dict(size=4),
-                    hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: BIC = %{{y:.2f}}<extra></extra>",
-                )
-            )
-    fig_bic.update_layout(
-        template="plotly_white",
-        height=280,
-        margin=dict(l=50, r=20, t=20, b=40),
-        xaxis=dict(title="Iteration", gridcolor="#eaeef2"),
-        yaxis=dict(title="BIC (Lower is Better)", gridcolor="#eaeef2"),
-        legend=dict(orientation="h", y=1.08, x=0.02),
-        hovermode="x unified",
-    )
-    div_bic = to_html(fig_bic, include_plotlyjs=False, full_html=False, config=plotly_config)
-
-    # 3. Final BIC Bar Chart
-    fig_bar = go.Figure()
-    fig_bar.add_trace(
-        go.Bar(
-            x=model_names,
-            y=final_bic,
-            name="Final BIC",
-            marker=dict(color="#cf222e", opacity=0.85),
-            hovertemplate="<b>%{x}</b><br>BIC: %{y:.2f}<extra></extra>",
-        )
-    )
-    fig_bar.update_layout(
-        template="plotly_white",
-        height=280,
-        margin=dict(l=50, r=20, t=20, b=40),
-        xaxis=dict(title="Model", gridcolor="#eaeef2"),
-        yaxis=dict(title="Final BIC", gridcolor="#eaeef2"),
-    )
-    div_bar = to_html(fig_bar, include_plotlyjs=False, full_html=False, config=plotly_config)
-
-    # Comparison Table HTML
-    comp_rows_html = ""
-    for idx in sorted_indices:
-        m_name = model_names[idx]
-        is_winner = ranks[idx] == 1
-        d_bic = delta_bic[idx]
-        d_bic_str = "0.0 (Best)" if is_winner else f"+{d_bic:.2f}"
-        badge_style = "background: #1a7f37; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 700;" if is_winner else "color: #59636e;"
-
-        comp_rows_html += f"""
-        <tr style="border-bottom: 1px solid #eaeef2; {'background: rgba(26, 127, 55, 0.04);' if is_winner else ''}">
-            <td style="padding: 10px 14px;"><span style="{badge_style}">#{ranks[idx]}</span></td>
-            <td style="padding: 10px 14px; font-weight: 700; font-family: monospace;">{m_name}</td>
-            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{n_params_list[idx]}</td>
-            <td style="padding: 10px 14px; font-family: monospace; color: #0969da;">{final_evidence[idx]:.2f}</td>
-            <td style="padding: 10px 14px; font-family: monospace; font-weight: 700;">{final_bic[idx]:.2f}</td>
-            <td style="padding: 10px 14px; font-family: monospace; color: {'#1a7f37' if is_winner else '#cf222e'}; font-weight: 600;">{d_bic_str}</td>
-        </tr>
-        """
-
-    # Optional Parameter Comparisons HTML
-    param_cards_html = ""
-    if compare_params:
-        for p in compare_params:
-            valid_models = [name for name in model_names if p in model_dict[name].params]
-            p_means = [model_dict[name].hyper_params[p]["mean"] for name in valid_models]
-            p_sds = [model_dict[name].hyper_params[p]["sd"] for name in valid_models]
-
-            fig_param = go.Figure()
-            fig_param.add_trace(
-                go.Scatter(
-                    x=valid_models,
-                    y=p_means,
-                    error_y=dict(type="data", array=p_sds, visible=True),
-                    mode="markers+text",
-                    text=[f"{m:.3f}" for m in p_means],
-                    textposition="top center",
-                    marker=dict(size=10, color="#8250df"),
-                    name="Mean ± 1 SD",
-                    hovertemplate="<b>%{x}</b><br>Mean: %{y:.3f}<extra></extra>",
-                )
-            )
-            fig_param.update_layout(
-                template="plotly_white",
-                height=240,
-                margin=dict(l=45, r=15, t=20, b=40),
-                xaxis=dict(title="Model", gridcolor="#eaeef2"),
-                yaxis=dict(title=f"{p} Value", gridcolor="#eaeef2"),
-            )
-            div_param = to_html(fig_param, include_plotlyjs=False, full_html=False, config=plotly_config)
-            param_cards_html += f"""
-            <div style="background: #ffffff; border: 1px solid #eaeef2; border-radius: 8px; padding: 12px;">
-                <div style="font-weight: 700; font-family: monospace; margin-bottom: 4px; font-size: 13px;">Parameter: {p}</div>
-                {div_param}
-            </div>
-            """
-
-    comp_html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Model Comparison Report</title>
-    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f6f8fa;
-            color: #1f2328;
-            padding: 24px;
-            line-height: 1.5;
-        }}
-        .container {{
-            max-width: 1140px;
-            margin: 0 auto;
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-        }}
-        .card {{
+        /* MULTI-PAGE NAVIGATION BAR */
+        .report-navbar {{
             background: #ffffff;
             border: 1px solid #d1d9e0;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 1px 3px rgba(31,35,40,0.04);
+            border-radius: 10px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+            position: sticky;
+            top: 16px;
+            z-index: 100;
         }}
-        .card-header {{
-            padding-bottom: 12px;
-            margin-bottom: 16px;
-            border-bottom: 1px solid #eaeef2;
+        .nav-tabs {{
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
         }}
-        .card-title {{
-            font-size: 15px;
-            font-weight: 700;
+        .nav-tab {{
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #59636e;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+        }}
+        .nav-tab:hover {{
+            background: #f6f8fa;
             color: #1f2328;
         }}
-        .card-subtitle {{
-            font-size: 12px;
+        .nav-tab.active {{
+            background: rgba(9, 105, 218, 0.08);
+            border-color: rgba(9, 105, 218, 0.25);
+            color: #0969da;
+        }}
+        .nav-tab .tab-badge {{
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            background: #eaeef2;
             color: #59636e;
-            margin-top: 2px;
         }}
-        .grid-2 {{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+        .nav-tab.active .tab-badge {{
+            background: #0969da;
+            color: #ffffff;
         }}
-        @media (max-width: 768px) {{
-            .grid-2 {{ grid-template-columns: 1fr; }}
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            text-align: left;
+        .action-btn {{
+            background: #f6f8fa;
+            border: 1px solid #d1d9e0;
+            border-radius: 6px;
+            padding: 6px 12px;
             font-size: 12px;
-        }}
-        th {{
-            background-color: #f6f8fa;
-            color: #59636e;
             font-weight: 600;
-            padding: 10px 14px;
-            border-bottom: 1px solid #d1d9e0;
+            color: #1f2328;
+            cursor: pointer;
+            transition: background 0.15s;
+        }}
+        .action-btn:hover {{
+            background: #eaeef2;
+        }}
+
+        /* PAGE VISIBILITY */
+        .report-page {{
+            display: none;
+            flex-direction: column;
+            gap: 20px;
+            animation: fadeIn 0.15s ease-in-out;
+        }}
+        .report-page.active {{
+            display: flex;
+        }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(3px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+
+        /* CODE VIEWER TABS */
+        .code-tab {{
+            background: transparent;
+            border: none;
+            padding: 8px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: monospace;
+            color: #59636e;
+            cursor: pointer;
+            transition: all 0.15s;
+        }}
+        .code-tab:hover {{
+            color: #1f2328;
+            background: #f6f8fa;
+        }}
+        .code-tab.active {{
+            color: #0969da;
+            font-weight: 700;
+        }}
+
+        /* PRINT OPTIMIZATION */
+        @media print {{
+            body {{ background: #ffffff !important; padding: 0 !important; }}
+            .no-print {{ display: none !important; }}
+            .report-page {{ display: flex !important; page-break-after: always; break-after: page; margin-bottom: 24px; }}
+            .report-page:last-child {{ page-break-after: avoid; break-after: avoid; }}
+            .card {{ box-shadow: none !important; border: 1px solid #d1d9e0 !important; }}
         }}
     </style>
 </head>
 <body>
+    <div id="toast" style="position: fixed; bottom: 24px; right: 24px; background: #1f2328; color: #ffffff; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; display: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
+
     <div class="container">
-        <!-- Header -->
+        <!-- TOP HEADER CARD -->
         <div class="card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
             <div>
                 <span style="background: rgba(130, 80, 223, 0.1); color: #8250df; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid rgba(130, 80, 223, 0.2);">
-                    Multi-Model Comparison
+                    Multi-Model Comparison Report
                 </span>
-                <h1 style="font-size: 22px; font-weight: 800; color: #1f2328; margin-top: 6px;">Comparative Model Selection</h1>
-                <p style="font-size: 13px; color: #59636e;">Comparing {len(model_names)} models: {", ".join(model_names)}</p>
+                <h1 style="font-size: 22px; font-weight: 800; color: #1f2328; margin-top: 6px;">
+                    Model Comparison &amp; Parameter Evaluation
+                </h1>
+                <p style="font-size: 13px; color: #59636e; margin-top: 2px;">
+                    Comparing <strong>{len(model_names)}</strong> models: {", ".join(model_names)} • 
+                    <strong>{len(all_unique_params)}</strong> unique parameters across models • 
+                    <strong>{n_subjects}</strong> subjects evaluated
+                </p>
             </div>
             <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: right;">
                 <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Best Model (Lowest BIC)</div>
@@ -1169,73 +2112,308 @@ def compare_models(
             </div>
         </div>
 
-        <!-- Evolution Curves -->
-        <div class="grid-2">
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">Total Evidence Evolution Across Iterations</div>
-                    <div class="card-subtitle">Log marginal likelihood (higher is better)</div>
-                </div>
-                {div_ev}
+        <!-- MULTI-PAGE TAB NAVIGATION BAR -->
+        <nav class="report-navbar no-print">
+            <div class="nav-tabs">
+                <button class="nav-tab active" data-comp-page="comp-page-fit" onclick="switchCompPage('comp-page-fit')">
+                    <span class="tab-badge">1</span>
+                    <span>Fit &amp; BICs</span>
+                </button>
+                <button class="nav-tab" data-comp-page="comp-page-matrix" onclick="switchCompPage('comp-page-matrix')">
+                    <span class="tab-badge">2</span>
+                    <span>Parameter Matrix &amp; Code</span>
+                </button>
+                <button class="nav-tab" data-comp-page="comp-page-evolution" onclick="switchCompPage('comp-page-evolution')">
+                    <span class="tab-badge">3</span>
+                    <span>Parameter Evolution Comparison</span>
+                </button>
+            </div>
+            <div class="nav-actions">
+                <button class="action-btn" onclick="window.print()">
+                    🖨️ Print / Save as PDF
+                </button>
+            </div>
+        </nav>
+
+        <!-- ================================================================= -->
+        <!-- PAGE 1: FIT & BICS + PARTICIPANT BEST-EXPLAINED BREAKDOWN         -->
+        <!-- ================================================================= -->
+        <div id="comp-page-fit" class="report-page active">
+            <div class="card" style="padding: 12px 16px; background: #ffffff; border-left: 4px solid #0969da;">
+                <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Page 1: Likelihood, BIC Trajectories &amp; Subject-Level Selection</div>
+                <div style="font-size: 12px; color: #59636e;">Overall population evidence trajectories, BIC minimization curves, model ranking table, and % of participants best explained by each model.</div>
             </div>
 
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">BIC Evolution Across Iterations</div>
-                    <div class="card-subtitle">Bayesian Information Criterion (lower is better)</div>
+            <!-- Evolution Curves -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Total Evidence Evolution Across Iterations</div>
+                            <div class="card-subtitle">Log marginal likelihood summed across participants (higher is better)</div>
+                        </div>
+                    </div>
+                    {div_ev}
                 </div>
-                {div_bic}
+
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">BIC Evolution Across Iterations</div>
+                            <div class="card-subtitle">Bayesian Information Criterion penalizing parameter count (lower is better)</div>
+                        </div>
+                    </div>
+                    {div_bic}
+                </div>
+            </div>
+
+            <!-- Final Comparison: Ranking Table & Participants Best Explained Bar -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Final Model Ranking &amp; Diagnostic Statistics</div>
+                            <div class="card-subtitle">Ranked by BIC; ΔBIC &gt; 10 indicates decisive evidence difference</div>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Model</th>
+                                    <th>Description</th>
+                                    <th>k</th>
+                                    <th>Evidence</th>
+                                    <th>BIC</th>
+                                    <th>ΔBIC</th>
+                                    <th>Best Explained %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {comp_rows_html}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Percentage of Participants Best Explained</div>
+                            <div class="card-subtitle">Determined by individual subject log-marginal likelihoods at final iteration</div>
+                        </div>
+                    </div>
+                    {div_subj_bar}
+                </div>
+            </div>
+
+            <!-- Page 1 Footer Navigation -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px;" class="no-print">
+                <div></div>
+                <button class="action-btn" onclick="switchCompPage('comp-page-matrix')" style="color: #0969da; font-weight: 700; padding: 8px 16px;">
+                    Next Page: Parameter Matrix &amp; Code &rarr;
+                </button>
             </div>
         </div>
 
-        <!-- Final Comparison: Bar Plot & Table -->
-        <div class="grid-2">
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">Final BIC Comparison Bar Chart</div>
-                    <div class="card-subtitle">Comparing model complexity and goodness-of-fit</div>
-                </div>
-                {div_bar}
+        <!-- ================================================================= -->
+        <!-- PAGE 2: PARAMETER MATRIX & COLLAPSIBLE MODEL SOURCE CODE          -->
+        <!-- ================================================================= -->
+        <div id="comp-page-matrix" class="report-page">
+            <div class="card" style="padding: 12px 16px; background: #ffffff; border-left: 4px solid #1a7f37;">
+                <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Page 2: Parameter Inclusion Matrix &amp; Model Function Source Codes</div>
+                <div style="font-size: 12px; color: #59636e;">Overview table of which parameters are included in which models, with collapsible source code inspection for each model.</div>
             </div>
 
+            <!-- MODEL SHORT DESCRIPTIONS SUMMARY -->
+            <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+                {model_desc_cards_html}
+            </div>
+
+            <!-- PARAMETERS INCLUSION MATRIX TABLE (Y-axis = Parameters, X-axis = Models) -->
             <div class="card">
                 <div class="card-header">
-                    <div class="card-title">Final Model Ranking &amp; Statistics</div>
-                    <div class="card-subtitle">Ranked by BIC; ΔBIC &gt; 10 indicates decisive evidence</div>
+                    <div>
+                        <div class="card-title">Parameter Inclusion Overview Matrix</div>
+                        <div class="card-subtitle">Parameters on Y-axis, Models on X-axis. Filled squares represent parameters included in each model.</div>
+                    </div>
                 </div>
                 <div style="overflow-x: auto; border: 1px solid #eaeef2; border-radius: 8px;">
                     <table>
                         <thead>
                             <tr>
-                                <th>Rank</th>
-                                <th>Model</th>
-                                <th>k</th>
-                                <th>Evidence</th>
-                                <th>BIC</th>
-                                <th>ΔBIC</th>
+                                <th style="width: 220px;">Parameter (Y-Axis)</th>
+                                {matrix_header_html}
                             </tr>
                         </thead>
                         <tbody>
-                            {comp_rows_html}
+                            {matrix_rows_html}
                         </tbody>
+                        <tfoot>
+                            <tr style="background: #f6f8fa; border-top: 2px solid #d1d9e0;">
+                                <td style="padding: 10px 14px; font-weight: 700;">Total Parameters (k)</td>
+                                {matrix_footer_html}
+                            </tr>
+                        </tfoot>
                     </table>
+                    <div style="padding: 8px 14px; font-size: 11px; color: #59636e; background: #f6f8fa; border-top: 1px solid #eaeef2; display: flex; align-items: center; gap: 16px;">
+                        <span><span style="display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #0969da; vertical-align: middle; margin-right: 4px;"></span> Filled square = Included in model</span>
+                        <span><span style="display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1.5px dashed #d1d9e0; background: transparent; vertical-align: middle; margin-right: 4px;"></span> Dashed outline = Excluded</span>
+                    </div>
                 </div>
+            </div>
+
+            <!-- COLLAPSIBLE MODEL FUNCTIONS SOURCE CODE -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Model Function Source Code Inspection</div>
+                        <div class="card-subtitle">Select a model to view its exact Python implementation function. Collapsible to save space.</div>
+                    </div>
+                    <div style="display: flex; gap: 8px;" class="no-print">
+                        <button class="action-btn" id="code-collapse-toggle-btn" onclick="toggleCodeSection()">
+                            📂 Toggle Collapse
+                        </button>
+                    </div>
+                </div>
+
+                <div id="code-collapsible-wrapper">
+                    <!-- Model Selection Tabs -->
+                    <div style="display: flex; border-bottom: 1px solid #eaeef2; background: #f6f8fa; border-top-left-radius: 8px; border-top-right-radius: 8px; overflow-x: auto;">
+                        {model_code_tabs_html}
+                    </div>
+
+                    <!-- Code Display Blocks -->
+                    <div style="background: #0d1117; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; overflow: hidden; border: 1px solid #30363d; border-top: none;">
+                        {model_code_blocks_html}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 2 Footer Navigation -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px;" class="no-print">
+                <button class="action-btn" onclick="switchCompPage('comp-page-fit')" style="padding: 8px 16px;">
+                    &larr; Previous Page: Fit &amp; BICs
+                </button>
+                <button class="action-btn" onclick="switchCompPage('comp-page-evolution')" style="color: #8250df; font-weight: 700; padding: 8px 16px;">
+                    Next Page: Parameter Evolution Comparison &rarr;
+                </button>
             </div>
         </div>
 
-        {f'''
-        <!-- Parameter Comparisons -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">Parameter Comparison Across Models</div>
-                <div class="card-subtitle">Population mean ± 1 SD for shared parameters</div>
+        <!-- ================================================================= -->
+        <!-- PAGE 3: PARAMETER EVOLUTION COMPARISON (SHARED ON SAME PLOTS)     -->
+        <!-- ================================================================= -->
+        <div id="comp-page-evolution" class="report-page">
+            <div class="card" style="padding: 12px 16px; background: #ffffff; border-left: 4px solid #8250df;">
+                <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Page 3: Parameter Evolution Comparison</div>
+                <div style="font-size: 12px; color: #59636e;">
+                    Comparing all {len(active_params)} parameters. Shared parameters are plotted together on the same plot for direct comparison across models; unique parameters are shown for their respective model.
+                </div>
             </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
-                {param_cards_html}
+
+            <!-- Evolution Subplots Grid -->
+            <div class="grid-3">
+                {evolution_comparison_cards}
+            </div>
+
+            <!-- Page 3 Footer Navigation -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 10px;" class="no-print">
+                <button class="action-btn" onclick="switchCompPage('comp-page-matrix')" style="padding: 8px 16px;">
+                    &larr; Previous Page: Parameter Matrix &amp; Code
+                </button>
+                <div></div>
             </div>
         </div>
-        ''' if compare_params else ''}
     </div>
+
+    <script>
+        function switchCompPage(pageId) {{
+            document.querySelectorAll('.report-page').forEach(function(el) {{
+                el.classList.remove('active');
+            }});
+            document.querySelectorAll('.nav-tab').forEach(function(el) {{
+                el.classList.remove('active');
+            }});
+            var target = document.getElementById(pageId);
+            if (target) {{
+                target.classList.add('active');
+            }}
+            var tab = document.querySelector('[data-comp-page="' + pageId + '"]');
+            if (tab) {{
+                tab.classList.add('active');
+            }}
+            window.location.hash = pageId;
+            setTimeout(function() {{
+                window.dispatchEvent(new Event('resize'));
+            }}, 60);
+            window.scrollTo({{ top: 0, behavior: 'smooth' }});
+        }}
+
+        function showModelCode(modelName) {{
+            document.querySelectorAll('.code-panel').forEach(function(el) {{
+                el.style.display = 'none';
+                el.classList.remove('active');
+            }});
+            document.querySelectorAll('.code-tab').forEach(function(el) {{
+                el.classList.remove('active');
+                el.style.borderBottomColor = 'transparent';
+            }});
+            var panel = document.getElementById('code-panel-' + modelName);
+            if (panel) {{
+                panel.style.display = 'block';
+                panel.classList.add('active');
+            }}
+            var tab = document.querySelector('[data-code-model="' + modelName + '"]');
+            if (tab) {{
+                tab.classList.add('active');
+                tab.style.borderBottomColor = '#0969da';
+            }}
+        }}
+
+        function copySpecificCode(modelName) {{
+            var el = document.getElementById('code-content-' + modelName);
+            if (!el) return;
+            navigator.clipboard.writeText(el.innerText).then(function() {{
+                showToast('✅ Copied ' + modelName + ' source code!');
+            }}).catch(function() {{
+                showToast('Failed to copy to clipboard.');
+            }});
+        }}
+
+        var isCodeCollapsed = false;
+        function toggleCodeSection() {{
+            var wrapper = document.getElementById('code-collapsible-wrapper');
+            var btn = document.getElementById('code-collapse-toggle-btn');
+            if (!wrapper) return;
+            isCodeCollapsed = !isCodeCollapsed;
+            if (isCodeCollapsed) {{
+                wrapper.style.display = 'none';
+                btn.innerText = '📁 Show Code';
+            }} else {{
+                wrapper.style.display = 'block';
+                btn.innerText = '📂 Hide Code';
+            }}
+        }}
+
+        function showToast(msg) {{
+            var t = document.getElementById('toast');
+            if (!t) return;
+            t.innerText = msg;
+            t.style.display = 'block';
+            setTimeout(function() {{
+                t.style.display = 'none';
+            }}, 2500);
+        }}
+
+        window.addEventListener('DOMContentLoaded', function() {{
+            var hash = window.location.hash.replace('#', '');
+            if (hash && document.getElementById(hash)) {{
+                switchCompPage(hash);
+            }}
+        }});
+    </script>
 </body>
 </html>
 """
