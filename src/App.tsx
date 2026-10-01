@@ -25,7 +25,70 @@ import {
   Cpu,
   Sparkles,
   Database,
+  Maximize2,
+  Minimize2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function highlightPythonCode(code: string): string {
+  if (!code) return '';
+
+  const tokenRegex = /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#[^\n]*|\bdef\s+([a-zA-Z_]\w*)|\b(?:def|return|for|in|if|else|elif|import|from|as|and|or|not|while|yield|pass|break|continue|lambda|try|except|finally|raise|with|class)\b|\b(?:True|False|None)\b|\b(?:self)\b|\b(?:np|zeros|ones|array|exp|log|max|min|sum|len|range|zip|enumerate|float|int|str|dict|list|set|bool|expit|softplus|sigmoid|clip|print|abs|round)\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|(==|!=|<=|>=|\+=|-=|\*=|\/=|[-+*\/=<>%]))/g;
+
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenRegex.exec(code)) !== null) {
+    if (match.index > lastIndex) {
+      result += escapeHtml(code.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+
+    if (token.startsWith('"""') || token.startsWith("'''")) {
+      result += `<span style="color: #7ee787; font-style: italic;">${escapeHtml(token)}</span>`;
+    } else if (token.startsWith('"') || token.startsWith("'")) {
+      result += `<span style="color: #a5d6ff;">${escapeHtml(token)}</span>`;
+    } else if (token.startsWith('#')) {
+      result += `<span style="color: #8b949e; font-style: italic;">${escapeHtml(token)}</span>`;
+    } else if (token.startsWith('def ')) {
+      const funcName = match[2] || token.slice(4).trim();
+      result += `<span style="color: #ff7b72; font-weight: 600;">def</span> <span style="color: #d2a8ff; font-weight: 700;">${escapeHtml(funcName)}</span>`;
+    } else if (/^(def|return|for|in|if|else|elif|import|from|as|and|or|not|while|yield|pass|break|continue|lambda|try|except|finally|raise|with|class)$/.test(token)) {
+      result += `<span style="color: #ff7b72; font-weight: 600;">${escapeHtml(token)}</span>`;
+    } else if (/^(True|False|None)$/.test(token)) {
+      result += `<span style="color: #79c0ff; font-weight: 600;">${escapeHtml(token)}</span>`;
+    } else if (token === 'self') {
+      result += `<span style="color: #ffa657; font-style: italic;">self</span>`;
+    } else if (/^(np|zeros|ones|array|exp|log|max|min|sum|len|range|zip|enumerate|float|int|str|dict|list|set|bool|expit|softplus|sigmoid|clip|print|abs|round)$/.test(token)) {
+      result += `<span style="color: #79c0ff;">${escapeHtml(token)}</span>`;
+    } else if (/^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(token)) {
+      result += `<span style="color: #79c0ff;">${escapeHtml(token)}</span>`;
+    } else if (/^(==|!=|<=|>=|\+=|-=|\*=|\/=|[-+*\/=<>%])$/.test(token)) {
+      result += `<span style="color: #ff7b72;">${escapeHtml(token)}</span>`;
+    } else {
+      result += escapeHtml(token);
+    }
+
+    lastIndex = tokenRegex.lastIndex;
+  }
+
+  if (lastIndex < code.length) {
+    result += escapeHtml(code.slice(lastIndex));
+  }
+
+  return result;
+}
 
 const PARAM_KEYS = ['alpha', 'beta', 'decay', 'bias', 'noise', 'pers'] as const;
 type ParamKey = typeof PARAM_KEYS[number];
@@ -35,6 +98,8 @@ interface ParamTrajectory {
   means: number[];
   sdUpper: number[];
   sdLower: number[];
+  groupA?: number[];
+  groupB?: number[];
 }
 
 const mockTrajectories: Record<ParamKey, ParamTrajectory> = {
@@ -43,6 +108,8 @@ const mockTrajectories: Record<ParamKey, ParamTrajectory> = {
     means: [0.500, 0.462, 0.435, 0.418, 0.410, 0.405, 0.402, 0.400, 0.398, 0.397, 0.397, 0.396],
     sdUpper: [0.731, 0.684, 0.632, 0.589, 0.554, 0.528, 0.509, 0.495, 0.485, 0.478, 0.474, 0.471],
     sdLower: [0.269, 0.261, 0.258, 0.264, 0.276, 0.291, 0.304, 0.312, 0.318, 0.322, 0.325, 0.327],
+    groupA: [0.530, 0.490, 0.462, 0.443, 0.434, 0.428, 0.425, 0.423, 0.421, 0.420, 0.420, 0.419],
+    groupB: [0.470, 0.434, 0.408, 0.393, 0.386, 0.382, 0.379, 0.377, 0.375, 0.374, 0.374, 0.373],
   },
   beta: {
     iters: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -416,6 +483,8 @@ export default function App() {
   const [comparisonSubTab, setComparisonSubTab] = useState<'fit' | 'matrix' | 'evolution'>('fit');
   const [selectedCodeModel, setSelectedCodeModel] = useState<string>('QLearn_Pers');
   const [isCodeCollapsed, setIsCodeCollapsed] = useState<boolean>(false);
+  const [isCodeExpanded, setIsCodeExpanded] = useState<boolean>(false);
+  const [isSingleModelCodeExpanded, setIsSingleModelCodeExpanded] = useState<boolean>(false);
   const [copiedCompareCode, setCopiedCompareCode] = useState<boolean>(false);
 
   const handleCopyCompareCode = (code: string) => {
@@ -1153,16 +1222,50 @@ export default function App() {
                         Model Function Source Code Inspection
                       </h3>
                       <p className="text-xs text-[#59636e]">
-                        Select a model to view its exact Python implementation function. Collapsible to save vertical space.
+                        Select a model to view its exact Python implementation with standard IDE syntax coloring. Use &quot;Show All Code&quot; to expand the full window without inner scrolling, or collapse to save space.
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {!isCodeCollapsed && (
+                        <button
+                          onClick={() => setIsCodeExpanded(!isCodeExpanded)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border transition-all cursor-pointer ${
+                            isCodeExpanded
+                              ? 'bg-[#0969da]/10 text-[#0969da] border-[#0969da]/40 shadow-2xs'
+                              : 'text-[#1f2328] bg-[#f6f8fa] border-[#d1d9e0] hover:bg-[#eaeef2]'
+                          }`}
+                          title={isCodeExpanded ? 'Switch to compact window with internal scrollbar' : 'Expand window to display entire code without internal scrolling'}
+                        >
+                          {isCodeExpanded ? (
+                            <>
+                              <Minimize2 className="w-3.5 h-3.5 text-[#0969da]" />
+                              <span>Compact Window</span>
+                            </>
+                          ) : (
+                            <>
+                              <Maximize2 className="w-3.5 h-3.5 text-[#0969da]" />
+                              <span>Show All Code</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
                       <button
                         onClick={() => setIsCodeCollapsed(!isCodeCollapsed)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1f2328] bg-[#f6f8fa] border border-[#d1d9e0] rounded-md hover:bg-[#eaeef2] transition-colors cursor-pointer"
                       >
-                        <span>{isCodeCollapsed ? '📁 Show Code' : '📂 Hide Code'}</span>
+                        {isCodeCollapsed ? (
+                          <>
+                            <Eye className="w-3.5 h-3.5 text-[#0969da]" />
+                            <span>Show Code</span>
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5 text-[#59636e]" />
+                            <span>Hide Code</span>
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -1192,36 +1295,73 @@ export default function App() {
 
                       {/* Code Display Container */}
                       <div className="bg-[#0d1117] border border-[#30363d] rounded-lg overflow-hidden shadow-inner font-mono">
-                        <div className="bg-[#161b22] px-4 py-2 border-b border-[#30363d] flex items-center justify-between text-xs text-[#8b949e]">
+                        <div className="bg-[#161b22] px-4 py-2 border-b border-[#30363d] flex items-center justify-between text-xs text-[#8b949e] flex-wrap gap-2">
                           <div className="flex items-center gap-2">
                             <div className="flex gap-1.5">
                               <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]" />
                               <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]" />
                               <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]" />
                             </div>
-                            <span className="text-[#c9d1d9] font-semibold text-xs ml-2">
+                            <span className="text-[#c9d1d9] font-semibold text-xs ml-1">
                               {selectedCodeModel}.py
                             </span>
-                          </div>
-                          <button
-                            onClick={() => handleCopyCompareCode(COMPARISON_MODELS[selectedCodeModel]?.code || '')}
-                            className="flex items-center gap-1 px-2.5 py-1 text-[11px] text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
-                          >
-                            {copiedCompareCode ? (
-                              <>
-                                <Check className="w-3 h-3 text-[#27c93f]" />
-                                <span className="text-[#27c93f]">Copied!</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="w-3 h-3" />
-                                <span>Copy Python Code</span>
-                              </>
+                            <span className="text-[10px] text-[#7ee787] px-1.5 py-0.5 rounded bg-[#7ee787]/10 border border-[#7ee787]/20 font-sans">
+                              IDE Colors
+                            </span>
+                            {isCodeExpanded && (
+                              <span className="text-[10px] text-[#58a6ff] bg-[#58a6ff]/10 border border-[#58a6ff]/20 px-1.5 py-0.5 rounded font-sans font-medium">
+                                Full Height (Scroll Page)
+                              </span>
                             )}
-                          </button>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setIsCodeExpanded(!isCodeExpanded)}
+                              className="flex items-center gap-1 px-2.5 py-1 text-[11px] text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                              title={isCodeExpanded ? "Switch to compact window with internal scrollbar" : "Expand window to show all code without scrollbar"}
+                            >
+                              {isCodeExpanded ? (
+                                <>
+                                  <Minimize2 className="w-3 h-3 text-[#58a6ff]" />
+                                  <span>Compact View</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Maximize2 className="w-3 h-3 text-[#58a6ff]" />
+                                  <span>Show All Code</span>
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              onClick={() => handleCopyCompareCode(COMPARISON_MODELS[selectedCodeModel]?.code || '')}
+                              className="flex items-center gap-1 px-2.5 py-1 text-[11px] text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                            >
+                              {copiedCompareCode ? (
+                                <>
+                                  <Check className="w-3 h-3 text-[#27c93f]" />
+                                  <span className="text-[#27c93f]">Copied!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copy Python Code</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
                         </div>
-                        <pre className="p-4 text-xs text-[#e6edf3] overflow-x-auto max-h-[320px] leading-relaxed">
-                          <code>{COMPARISON_MODELS[selectedCodeModel]?.code}</code>
+                        <pre
+                          className={`p-4 text-xs font-mono text-[#e6edf3] overflow-x-auto leading-relaxed transition-all ${
+                            isCodeExpanded ? 'max-h-none overflow-y-visible' : 'max-h-[340px] overflow-y-auto'
+                          }`}
+                        >
+                          <code
+                            dangerouslySetInnerHTML={{
+                              __html: highlightPythonCode(COMPARISON_MODELS[selectedCodeModel]?.code || '')
+                            }}
+                          />
                         </pre>
                       </div>
                     </div>
@@ -1798,44 +1938,94 @@ export default function App() {
                     .map((it, idx) => `${idx === 0 ? 'M' : 'L'} ${getP_X(it)},${getP_Y(traj.means[idx])}`)
                     .join(' ');
 
+                  const hasGroupDiff = pKey === 'alpha' && Boolean(traj.groupA && traj.groupB);
+                  const groupAD = traj.groupA
+                    ? traj.iters
+                        .map((it, idx) => `${idx === 0 ? 'M' : 'L'} ${getP_X(it)},${getP_Y(traj.groupA![idx])}`)
+                        .join(' ')
+                    : null;
+                  const groupBD = traj.groupB
+                    ? traj.iters
+                        .map((it, idx) => `${idx === 0 ? 'M' : 'L'} ${getP_X(it)},${getP_Y(traj.groupB![idx])}`)
+                        .join(' ')
+                    : null;
+
                   const isHovered = hoveredIter?.param === pKey;
 
                   return (
-                    <div key={pKey} className="border border-[#eaeef2] rounded-lg p-3 bg-white">
-                      <div className="flex items-center justify-between text-xs font-mono mb-1.5">
-                        <span className="font-bold text-[#1f2328]">{pKey}</span>
-                        <span className="text-[#0969da]">mean={traj.means[11].toFixed(3)}</span>
+                    <div key={pKey} className="border border-[#eaeef2] rounded-lg p-3 bg-white flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center justify-between text-xs font-mono mb-1.5">
+                          <span className="font-bold text-[#1f2328]">{pKey}</span>
+                          <span className="text-[#59636e] font-semibold">mean={traj.means[11].toFixed(3)}</span>
+                        </div>
+
+                        <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full h-38 select-none" onMouseLeave={() => setHoveredIter(null)}>
+                          {[0, 0.5, 1.0].map((frac, idx) => {
+                            const y = subPad.top + frac * (subH - subPad.top - subPad.bottom);
+                            const val = pYMax - frac * pYRange;
+                            return (
+                              <g key={idx}>
+                                <line x1={subPad.left} y1={y} x2={subW - subPad.right} y2={y} stroke="#eaeef2" />
+                                <text x={subPad.left - 6} y={y + 3} textAnchor="end" fontSize="9" fill="#8c959f" fontFamily="monospace">
+                                  {val.toFixed(2)}
+                                </text>
+                              </g>
+                            );
+                          })}
+                          {/* Unified ribbon fill for all parameters */}
+                          <path d={pRibbonD} fill="rgba(31, 35, 40, 0.10)" />
+
+                          {/* Group A line (if group difference enabled) */}
+                          {groupAD && (
+                            <path d={groupAD} fill="none" stroke="#0969da" strokeWidth="2" strokeDasharray="3 2" />
+                          )}
+
+                          {/* Group B line (if group difference enabled) */}
+                          {groupBD && (
+                            <path d={groupBD} fill="none" stroke="#cf222e" strokeWidth="2" strokeDasharray="3 2" />
+                          )}
+
+                          {/* Grand Mean line (uses unified single color #1f2328 for all parameters) */}
+                          <path d={pMeanD} fill="none" stroke="#1f2328" strokeWidth="2.4" />
+
+                          {traj.iters.map((it, idx) => (
+                            <circle
+                              key={it}
+                              cx={getP_X(it)}
+                              cy={getP_Y(traj.means[idx])}
+                              r={isHovered && hoveredIter?.iter === it ? 4.5 : 2.5}
+                              fill="#1f2328"
+                              stroke="#fff"
+                              strokeWidth="1"
+                              className="cursor-pointer"
+                              onMouseEnter={() => setHoveredIter({ param: pKey, iter: it })}
+                            />
+                          ))}
+                        </svg>
                       </div>
 
-                      <svg viewBox={`0 0 ${subW} ${subH}`} className="w-full h-40 select-none" onMouseLeave={() => setHoveredIter(null)}>
-                        {[0, 0.5, 1.0].map((frac, idx) => {
-                          const y = subPad.top + frac * (subH - subPad.top - subPad.bottom);
-                          const val = pYMax - frac * pYRange;
-                          return (
-                            <g key={idx}>
-                              <line x1={subPad.left} y1={y} x2={subW - subPad.right} y2={y} stroke="#eaeef2" />
-                              <text x={subPad.left - 6} y={y + 3} textAnchor="end" fontSize="9" fill="#8c959f" fontFamily="monospace">
-                                {val.toFixed(2)}
-                              </text>
-                            </g>
-                          );
-                        })}
-                        <path d={pRibbonD} fill="rgba(9, 105, 218, 0.16)" />
-                        <path d={pMeanD} fill="none" stroke="#0969da" strokeWidth="2.2" />
-                        {traj.iters.map((it, idx) => (
-                          <circle
-                            key={it}
-                            cx={getP_X(it)}
-                            cy={getP_Y(traj.means[idx])}
-                            r={isHovered && hoveredIter.iter === it ? 4.5 : 2.5}
-                            fill="#0969da"
-                            stroke="#fff"
-                            strokeWidth="1"
-                            className="cursor-pointer"
-                            onMouseEnter={() => setHoveredIter({ param: pKey, iter: it })}
-                          />
-                        ))}
-                      </svg>
+                      {/* Legend for parameter evolution */}
+                      {hasGroupDiff ? (
+                        <div className="flex items-center gap-3 text-[10px] font-mono mt-2 pt-1.5 border-t border-[#eaeef2] flex-wrap">
+                          <span className="flex items-center gap-1 text-[#1f2328] font-semibold">
+                            <span className="w-2.5 h-0.5 bg-[#1f2328]" /> Grand Mean
+                          </span>
+                          <span className="flex items-center gap-1 text-[#0969da] font-semibold">
+                            <span className="w-2.5 h-0.5 bg-[#0969da]" /> Group A
+                          </span>
+                          <span className="flex items-center gap-1 text-[#cf222e] font-semibold">
+                            <span className="w-2.5 h-0.5 bg-[#cf222e]" /> Group B
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between text-[10px] font-mono mt-2 pt-1.5 border-t border-[#eaeef2] text-[#8c959f]">
+                          <span className="flex items-center gap-1 text-[#1f2328]">
+                            <span className="w-2.5 h-0.5 bg-[#1f2328]" /> Population Mean
+                          </span>
+                          <span>±1 SD ribbon</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -2053,7 +2243,7 @@ export default function App() {
 
             {/* Python Model Source Code Viewer */}
             <div className="bg-[#0d1117] rounded-xl border border-[#30363d] overflow-hidden shadow-2xs">
-              <div className="flex items-center justify-between px-4 py-2.5 bg-[#161b22] border-b border-[#30363d]">
+              <div className="flex items-center justify-between px-4 py-2.5 bg-[#161b22] border-b border-[#30363d] flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <div className="flex gap-1.5">
                     <div className="w-3 h-3 rounded-full bg-[#ff5f56]" />
@@ -2063,51 +2253,38 @@ export default function App() {
                   <span className="text-[#c9d1d9] font-mono text-xs font-semibold ml-2">
                     {mockMetadata.model_name}.py (Fitted Model Function)
                   </span>
-                </div>
-                <button
-                  onClick={handleCopyCode}
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
-                >
-                  {copiedCode ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-[#27c93f]" />
-                      <span className="text-[#27c93f]">Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy Code</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <pre className="p-4 text-xs font-mono text-[#e6edf3] overflow-x-auto max-h-[380px] leading-relaxed">
-                <code>{mockMetadata.model_code}</code>
-              </pre>
-            </div>
-
-            {/* Companion Metadata JSON File Viewer */}
-            <div className="bg-[#0d1117] rounded-xl border border-[#30363d] overflow-hidden shadow-2xs">
-              <div className="flex items-center justify-between px-4 py-2.5 bg-[#161b22] border-b border-[#30363d]">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-[#8250df]" />
-                  <span className="text-[#c9d1d9] font-mono text-xs font-semibold">
-                    {mockMetadata.model_name}_metadata.json (Companion Metadata)
+                  <span className="text-[10px] text-[#7ee787] px-1.5 py-0.5 rounded bg-[#7ee787]/10 border border-[#7ee787]/20 font-sans">
+                    IDE Colors
                   </span>
+                  {isSingleModelCodeExpanded && (
+                    <span className="text-[10px] text-[#58a6ff] bg-[#58a6ff]/10 border border-[#58a6ff]/20 px-1.5 py-0.5 rounded font-sans font-medium">
+                      Full Height (Scroll Page)
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={handleDownloadMetadata}
+                    onClick={() => setIsSingleModelCodeExpanded(!isSingleModelCodeExpanded)}
                     className="flex items-center gap-1 px-2.5 py-1 text-xs text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
+                    title={isSingleModelCodeExpanded ? "Switch to compact window with scrollbar" : "Expand window to show all code without scrollbar"}
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Download JSON</span>
+                    {isSingleModelCodeExpanded ? (
+                      <>
+                        <Minimize2 className="w-3.5 h-3.5 text-[#58a6ff]" />
+                        <span>Compact View</span>
+                      </>
+                    ) : (
+                      <>
+                        <Maximize2 className="w-3.5 h-3.5 text-[#58a6ff]" />
+                        <span>Show All Code</span>
+                      </>
+                    )}
                   </button>
                   <button
-                    onClick={handleCopyJson}
+                    onClick={handleCopyCode}
                     className="flex items-center gap-1 px-2.5 py-1 text-xs text-[#c9d1d9] bg-white/10 hover:bg-white/20 rounded border border-white/15 transition-all cursor-pointer"
                   >
-                    {copiedJson ? (
+                    {copiedCode ? (
                       <>
                         <Check className="w-3.5 h-3.5 text-[#27c93f]" />
                         <span className="text-[#27c93f]">Copied!</span>
@@ -2115,15 +2292,41 @@ export default function App() {
                     ) : (
                       <>
                         <Copy className="w-3.5 h-3.5" />
-                        <span>Copy JSON</span>
+                        <span>Copy Code</span>
                       </>
                     )}
                   </button>
                 </div>
               </div>
-              <pre className="p-4 text-xs font-mono text-[#8b949e] overflow-x-auto max-h-[340px] leading-relaxed">
-                <code>{JSON.stringify(mockMetadata, null, 2)}</code>
+              <pre
+                className={`p-4 text-xs font-mono text-[#e6edf3] overflow-x-auto leading-relaxed transition-all ${
+                  isSingleModelCodeExpanded ? 'max-h-none overflow-y-visible' : 'max-h-[380px] overflow-y-auto'
+                }`}
+              >
+                <code
+                  dangerouslySetInnerHTML={{
+                    __html: highlightPythonCode(mockMetadata.model_code)
+                  }}
+                />
               </pre>
+            </div>
+
+            {/* Compact Companion Metadata Download Action */}
+            <div className="flex items-center justify-between p-3.5 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <FileText className="w-4 h-4 text-[#8250df]" />
+                <div>
+                  <div className="text-xs font-bold text-[#1f2328]">Companion Run Metadata File</div>
+                  <div className="text-[11px] text-[#59636e]">All hyperparameters, diagnostics, and system specs shown above are serialized in <code>{mockMetadata.model_name}_metadata.json</code>.</div>
+                </div>
+              </div>
+              <button
+                onClick={handleDownloadMetadata}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0969da] bg-[#f6f8fa] hover:bg-[#eaeef2] border border-[#d1d9e0] rounded-md transition-all cursor-pointer shadow-2xs"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Metadata JSON</span>
+              </button>
             </div>
 
             {/* Page 3 Footer Navigation */}

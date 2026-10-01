@@ -253,9 +253,14 @@ Runs the iterative importance sampling estimation loop until maximum iterations 
   If `True`, prints clean iteration timestamps, evidence change, and elapsed/remaining durations.
 * **`progress_bar`** (`Union[bool, str]`, default=`True`):
   Controls progress bar display:
-  * `True` (or `"iteration"`): Displays a progress bar for **each iteration** that fills across subjects (0 to N subjects). When each iteration completes, its progress bar remains in place displaying the complete iteration summary: duration (`Took`), BIC, log-likelihood (`Ev`), change in likelihood (`ΔEv`), moving-average change over the last `n_mean` iterations (`ΔEv({n_mean})` convergence metric), and total time elapsed (`Elapsed`).
+  * `True` (or `"iteration"`): Displays a progress bar for **each iteration** that fills across subjects (0 to N subjects). When each iteration completes, its progress bar remains in place displaying the complete iteration summary: BIC, log-likelihood (`Ev`), change in likelihood (`ΔEv`), moving-average change over the last `n_mean` iterations (`ΔEv({n_mean})` convergence metric), and total time elapsed (`Elapsed`). Note that iteration duration is already displayed in the standard progress rate brackets.
   * `"overall"` (or `"single"`): Displays a single progress bar for all iterations.
   * `False`: Disables all progress bars.
+* **`n_jobs`** (`int`, default=`1`):
+  Controls multi-core parallel execution across subjects during importance sampling:
+  * `1`: Sequential single-threaded execution (deterministic and lightweight).
+  * `> 1`: Spawns a thread worker pool with independent, thread-safe RNG seeds across $N$ subjects.
+  * `-1`: Automatically utilizes all available CPU cores (`os.cpu_count()`) for maximum throughput.
 
 ---
 
@@ -407,7 +412,7 @@ Generates an interactive comparative report widget to evaluate two or more fitte
    * **Percentage of Participants Best Explained**: Reports the percentage and exact subject counts where each model achieved the highest individual log-marginal likelihood $\ln p(D_s \mid M)$.
 2. **Page 2: Parameter Inclusion Matrix & Collapsible Code**:
    * **Parameter Overview Matrix Table**: Parameters listed on the Y-axis, compared models on the X-axis. Clean visual matrix with filled squares for included parameters, center dots for parameters with group differences, and dashed outlines for excluded parameters, accompanied by concise model descriptions.
-   * **Collapsible Model Functions Code**: Tabbed viewer displaying the exact Python implementation function for each model, with a collapse/expand toggle to preserve vertical space and a one-click copy button.
+   * **Collapsible & Expandable Model Code Viewer**: Tabbed viewer displaying the exact Python implementation function for each model with standard IDE syntax coloring. Includes a "Show All Code" button that expands the viewer to full height without an inner scrollbar (allowing natural full-page scrolling), a "Hide Code" collapse toggle, and one-click copy.
 3. **Page 3: Parameter Evolution Comparison Plots**:
    * **Shared Parameters Plotted Together**: When a parameter repeats across multiple models (e.g. `alpha` or `beta`), all models containing it are displayed on the **same subplot** with distinct color-coded curves and $\pm 1 \text{ SD}$ uncertainty ribbons for direct visual comparison.
    * **Unique Parameters**: If a parameter is specific to a single model, it is plotted individually with a badge indicating its unique status.

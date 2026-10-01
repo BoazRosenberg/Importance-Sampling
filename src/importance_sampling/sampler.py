@@ -469,9 +469,13 @@ class Sampler:
         group_diff: Optional[Union[Dict[str, str], Sequence[str]]] = None,
         group_column: str = "group",
         params_with_group_diff: Optional[Union[Dict[str, str], Sequence[str]]] = None,
+        n_jobs: int = 1,
     ):
         self.data = list(data)
         self.model = model
+
+        # Parallelism configuration: n_jobs=1 (sequential), n_jobs>1 or n_jobs=-1 (parallel across subjects)
+        self.n_jobs = n_jobs
 
         # Number of choice options available per decision (e.g. 2 for a two-armed bandit).
         # This is the amount of choices the likelihood is based on and is important for the BIC calculations.
@@ -823,19 +827,20 @@ class Sampler:
         return res
 
     def sample_resample(
-        self, subj: int, n_samples: int = 1000
+        self, subj: int, n_samples: int = 1000, rng: Optional[np.random.Generator] = None
     ) -> Tuple[Dict[str, np.ndarray], float, Dict[str, float]]:
         """Sample candidate parameters from current prior, compute likelihoods, and resample."""
         subj_data = self.data[subj]
+        gen = rng if rng is not None else self.rng
 
         # Draw standardized multinormal samples
         try:
-            std_normals = self.rng.multivariate_normal(
+            std_normals = gen.multivariate_normal(
                 np.zeros(self.n_params), self.cor_matrix, size=n_samples
             ).T
         except np.linalg.LinAlgError:
             jitter = self.cor_matrix + np.eye(self.n_params) * 1e-6
-            std_normals = self.rng.multivariate_normal(
+            std_normals = gen.multivariate_normal(
                 np.zeros(self.n_params), jitter, size=n_samples
             ).T
 
@@ -882,7 +887,7 @@ class Sampler:
         mean_params = {param: float(np.sum(weights * raw_samples[param])) for param in self.params}
 
         # Multinomial particle resampling
-        resample_idx = self.rng.choice(n_samples, size=n_samples, p=weights, replace=True)
+        resample_idx = gen.choice(n_samples, size=n_samples, p=weights, replace=True)
         resample = {param: raw_samples[param][resample_idx] for param in self.params}
         resample["log_likelihood"] = log_likelihoods[resample_idx]
 
@@ -898,8 +903,20 @@ class Sampler:
         leave: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         position: int = 0,
+        n_jobs: Optional[int] = None,
     ) -> None:
-        """Run one iteration of importance sampling across all subjects and update priors."""
+        """Run one iteration of importance sampling across all subjects and update priors.
+
+        Supports multi-core parallel execution across subjects when n_jobs > 1 or n_jobs == -1.
+        """
+        import concurrent.futures
+
+        effective_n_jobs = self.n_jobs if n_jobs is None else n_jobs
+        if effective_n_jobs == -1:
+            workers = os.cpu_count() or 1
+        else:
+            workers = max(1, int(effective_n_jobs))
+
         subject_samples: Dict[str, List[np.ndarray]] = {param: [] for param in self.params}
         mean_params: Dict[str, List[float]] = {param: [] for param in self.params}
         log_likelihoods: List[float] = []
@@ -921,14 +938,43 @@ class Sampler:
         else:
             subj_iter = subj_indices
 
-        for s in subj_iter:
-            resample, log_mean_ll, s_mean = self.sample_resample(s, n_samples=n_samples)
-            for param in self.params:
-                subject_samples[param].append(resample[param])
-                mean_params[param].append(s_mean[param])
-            log_likelihoods.append(log_mean_ll)
-            if progress_callback is not None:
-                progress_callback(s + 1, self.n_subjects)
+        if workers == 1 or self.n_subjects <= 1:
+            for s in subj_iter:
+                resample, log_mean_ll, s_mean = self.sample_resample(s, n_samples=n_samples)
+                for param in self.params:
+                    subject_samples[param].append(resample[param])
+                    mean_params[param].append(s_mean[param])
+                log_likelihoods.append(log_mean_ll)
+                if progress_callback is not None:
+                    progress_callback(s + 1, self.n_subjects)
+        else:
+            # Parallel execution across subjects using thread pool with independent seeded RNGs
+            seeds = [int(self.rng.integers(0, 2**31 - 1)) for _ in range(self.n_subjects)]
+            results: List[Optional[Tuple[Dict[str, np.ndarray], float, Dict[str, float]]]] = [None] * self.n_subjects
+            completed_count = 0
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, self.n_subjects)) as executor:
+                future_to_subj = {
+                    executor.submit(self.sample_resample, s, n_samples, np.random.default_rng(seeds[s])): s
+                    for s in range(self.n_subjects)
+                }
+                for future in concurrent.futures.as_completed(future_to_subj):
+                    s = future_to_subj[future]
+                    results[s] = future.result()
+                    completed_count += 1
+                    if pbar is not None:
+                        pbar.update(1)
+                    if progress_callback is not None:
+                        progress_callback(completed_count, self.n_subjects)
+
+            for s in range(self.n_subjects):
+                res = results[s]
+                if res is not None:
+                    resample, log_mean_ll, s_mean = res
+                    for param in self.params:
+                        subject_samples[param].append(resample[param])
+                        mean_params[param].append(s_mean[param])
+                    log_likelihoods.append(log_mean_ll)
 
         if pbar is not None and not leave:
             pbar.close()
@@ -1056,6 +1102,7 @@ class Sampler:
         stop_at_convergence: bool = True,
         verbose: bool = False,
         progress_bar: Union[bool, str] = True,
+        n_jobs: Optional[int] = None,
     ) -> "Sampler":
         """Run the iterative importance sampling estimation loop until convergence.
 
@@ -1077,11 +1124,16 @@ class Sampler:
             Progress bar display mode:
             - True (or 'iteration'): Displays a new progress bar for each iteration that fills
               across subjects (0 to N subjects). When each iteration completes, its progress bar
-              remains in place displaying a complete summary: duration (Took), BIC, log-likelihood
-              (Ev), change in likelihood (ΔEv), change in likelihood over the last n_mean iterations
+              remains in place displaying a complete summary: BIC, log-likelihood (Ev),
+              change in likelihood (ΔEv), change in likelihood over the last n_mean iterations
               (ΔEv window convergence metric), and total elapsed time.
             - 'overall' (or 'single'): Displays a single progress bar for all iterations.
             - False: Disables progress bars.
+        n_jobs : Optional[int], default=None
+            Number of CPU threads/workers for evaluating subjects in parallel.
+            - None: uses self.n_jobs configured on Sampler initialization.
+            - 1: sequential single-threaded execution.
+            - >1 or -1: parallel execution across subjects (where -1 uses all available CPU cores).
         """
         start = time.time()
         iter_mode = "iteration" if progress_bar in (True, "iteration", "iter", "per_iteration") else progress_bar
@@ -1122,12 +1174,13 @@ class Sampler:
                     if curr == total or curr % max(1, total // 5) == 0:
                         overall_pbar.set_postfix({"subj": f"{curr}/{total}"}, refresh=True)
 
-            # Within-iteration progress across subjects (disable nested bar to prevent spam)
+            # Within-iteration progress across subjects (parallelized when n_jobs > 1 or n_jobs == -1)
             self.adjust_hyper_priors(
                 n_samples=n_samples,
                 disable_progress=True,
                 leave=False,
                 progress_callback=_on_subj_progress if (iter_pbar is not None or overall_pbar is not None) else None,
+                n_jobs=n_jobs,
             )
             self.iterations += 1
 
@@ -1154,7 +1207,6 @@ class Sampler:
             else:
                 window_change_str = "—"
 
-            iter_took_str = time_to_text(iter_duration)
             total_elapsed_str = time_to_text(total_elapsed)
 
             summary_postfix = {
@@ -1162,7 +1214,6 @@ class Sampler:
                 "ΔEv": delta_ev_str,
                 f"ΔEv({n_mean})": window_change_str,
                 "BIC": f"{curr_bic:.2f}",
-                "Took": iter_took_str,
                 "Elapsed": total_elapsed_str,
             }
 
@@ -1201,7 +1252,7 @@ class Sampler:
                     f"Evidence: {curr_ev:.4f} (ΔEv: {delta_ev_str}) | "
                     f"ΔEv({n_mean}): {window_change_str} | "
                     f"BIC: {curr_bic:.2f} | "
-                    f"Took: {iter_took_str} | Elapsed: {total_elapsed_str}"
+                    f"Elapsed: {total_elapsed_str}"
                 )
                 print(msg)
         else:

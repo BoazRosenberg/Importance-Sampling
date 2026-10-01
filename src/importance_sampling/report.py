@@ -89,6 +89,79 @@ class ReportDashboard:
         webbrowser.open(url)
 
 
+def highlight_python_code_html(code: str) -> str:
+    """Highlights Python source code with IDE-style syntax colors for HTML output."""
+    if not code:
+        return ""
+
+    import html as py_html
+    import re
+
+    token_regex = re.compile(
+        r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\''
+        r'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
+        r'|#[^\n]*'
+        r'|\bdef\s+([a-zA-Z_]\w*)'
+        r'|\b(?:def|return|for|in|if|else|elif|import|from|as|and|or|not|while|yield|pass|break|continue|lambda|try|except|finally|raise|with|class)\b'
+        r'|\b(?:True|False|None)\b'
+        r'|\b(?:self)\b'
+        r'|\b(?:np|zeros|ones|array|exp|log|max|min|sum|len|range|zip|enumerate|float|int|str|dict|list|set|bool|expit|softplus|sigmoid|clip|print|abs|round)\b'
+        r'|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b'
+        r'|(==|!=|<=|>=|\+=|-=|\*=|/=|[-+*/=<>%]))'
+    )
+
+    keywords = {
+        "def", "return", "for", "in", "if", "else", "elif", "import", "from",
+        "as", "and", "or", "not", "while", "yield", "pass", "break", "continue",
+        "lambda", "try", "except", "finally", "raise", "with", "class"
+    }
+    builtins = {
+        "np", "zeros", "ones", "array", "exp", "log", "max", "min", "sum",
+        "len", "range", "zip", "enumerate", "float", "int", "str", "dict",
+        "list", "set", "bool", "expit", "softplus", "sigmoid", "clip", "print", "abs", "round"
+    }
+
+    result = []
+    last_idx = 0
+    for match in token_regex.finditer(code):
+        start, end = match.span()
+        if start > last_idx:
+            result.append(py_html.escape(code[last_idx:start]))
+
+        token = match.group(0)
+
+        if token.startswith(('"""', "'''")):
+            result.append(f'<span style="color: #7ee787; font-style: italic;">{py_html.escape(token)}</span>')
+        elif token.startswith(('"', "'")):
+            result.append(f'<span style="color: #a5d6ff;">{py_html.escape(token)}</span>')
+        elif token.startswith('#'):
+            result.append(f'<span style="color: #8b949e; font-style: italic;">{py_html.escape(token)}</span>')
+        elif token.startswith("def "):
+            func_name = match.group(2) or token[4:].strip()
+            result.append(f'<span style="color: #ff7b72; font-weight: 600;">def</span> <span style="color: #d2a8ff; font-weight: 700;">{py_html.escape(func_name)}</span>')
+        elif token in keywords:
+            result.append(f'<span style="color: #ff7b72; font-weight: 600;">{py_html.escape(token)}</span>')
+        elif token in ("True", "False", "None"):
+            result.append(f'<span style="color: #79c0ff; font-weight: 600;">{py_html.escape(token)}</span>')
+        elif token == "self":
+            result.append(f'<span style="color: #ffa657; font-style: italic;">self</span>')
+        elif token in builtins:
+            result.append(f'<span style="color: #79c0ff;">{py_html.escape(token)}</span>')
+        elif re.match(r'^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$', token):
+            result.append(f'<span style="color: #79c0ff;">{py_html.escape(token)}</span>')
+        elif re.match(r'^(==|!=|<=|>=|\+=|-=|\*=|/=|[-+*/=<>%])$', token):
+            result.append(f'<span style="color: #ff7b72;">{py_html.escape(token)}</span>')
+        else:
+            result.append(py_html.escape(token))
+
+        last_idx = end
+
+    if last_idx < len(code):
+        result.append(py_html.escape(code[last_idx:]))
+
+    return "".join(result)
+
+
 def create_report(
     sampler: "Sampler",
     filename: Optional[str] = None,
@@ -267,13 +340,19 @@ def create_report(
     div_spaghetti = to_html(fig_spaghetti, include_plotlyjs=False, full_html=False, config=plotly_config)
 
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 3. PLOTS: Hyperparameter Evolution (One Clean Plot per Parameter)
     # -------------------------------------------------------------------------
     evolution_divs: List[Dict[str, Any]] = []
     space_label = "Transformed Space" if transformed else "Latent Normal Space"
 
+    # Unified color scheme for parameter evolution:
+    # A single consistent color for all parameters (which is also used for the grand mean),
+    # and two distinct additional colors for groups (Group 1: Blue, Group 2: Crimson).
+    grand_mean_color = "#1f2328"
+    group_colors = ["#0969da", "#cf222e", "#8250df", "#1a7f37"]
+
     for idx, param in enumerate(active_params):
-        color = palette[idx % len(palette)]
         t_func = sampler.transformations[param] if transformed else (lambda x: x)
 
         means_raw = np.array([hp[param]["mean"] for hp in sampler.hyper_params_list])
@@ -308,32 +387,31 @@ def create_report(
                 mode="lines",
                 line=dict(width=0),
                 fill="tonexty",
-                fillcolor="rgba(9, 105, 218, 0.15)",
+                fillcolor="rgba(31, 35, 40, 0.12)",
                 showlegend=False,
                 name="±1 SD",
                 hovertemplate="Iter %{x}<br><b>-1 SD</b>: %{y:.4f}<extra></extra>",
             )
         )
 
-        # Grand Mean line
+        # Grand Mean line (uses single unified color across all parameters)
         fig_p.add_trace(
             go.Scatter(
                 x=iters,
                 y=means_plot,
                 mode="lines+markers",
-                line=dict(color=color, width=2.5),
-                marker=dict(size=4, color=color),
+                line=dict(color=grand_mean_color, width=2.5),
+                marker=dict(size=4, color=grand_mean_color),
                 showlegend=has_group_diff,
                 name="Grand Mean" if has_group_diff else f"{param} Mean",
-                hovertemplate=f"Iter %{{x}}<br><b>Grand Mean</b>: %{{y:.4f}}<extra></extra>",
+                hovertemplate=f"Iter %{{x}}<br><b>{'Grand Mean' if has_group_diff else param + ' Mean'}</b>: %{{y:.4f}}<extra></extra>",
             )
         )
 
-        # Plot individual group means if group differences enabled
+        # Plot individual group means if group differences enabled using dedicated group colors
         if has_group_diff:
-            g_colors = ["#0969da", "#8250df", "#cf222e", "#bf8700"]
             for g_i, g in enumerate(sampler.group_names[param]):
-                g_col = g_colors[g_i % len(g_colors)]
+                g_col = group_colors[g_i % len(group_colors)]
                 g_means_hist = [
                     hp[param].get("group_means", {}).get(g, hp[param]["mean"])
                     for hp in sampler.hyper_params_list
@@ -343,7 +421,7 @@ def create_report(
                         x=iters,
                         y=[t_func(m) for m in g_means_hist],
                         mode="lines+markers",
-                        line=dict(color=g_col, width=2, dash="dash" if g != sampler.ref_group[param] else "solid"),
+                        line=dict(color=g_col, width=2.2, dash="dash" if g != sampler.ref_group[param] else "solid"),
                         marker=dict(size=4, color=g_col),
                         name=f"Group: {g}",
                         hovertemplate=f"Iter %{{x}}<br><b>Group {g}</b>: %{{y:.4f}}<extra></extra>",
@@ -564,7 +642,7 @@ def create_report(
         except Exception:
             model_code_str = getattr(sampler.model, "__doc__", "") or str(sampler.model)
 
-    escaped_code = py_html.escape(model_code_str.strip() or "# Model source code could not be inspected")
+    highlighted_code = highlight_python_code_html(model_code_str.strip() or "# Model source code could not be inspected")
     code_lines = len(model_code_str.strip().splitlines()) if model_code_str.strip() else 0
 
     # Format companion metadata JSON file string
@@ -1253,9 +1331,10 @@ def create_report(
                 <div class="card-header">
                     <div>
                         <div class="card-title">Model Source Code</div>
-                        <div class="card-subtitle">Exact Python callable invoked during log-likelihood evaluation and simulation ({code_lines} lines)</div>
+                        <div class="card-subtitle">Exact Python callable invoked during log-likelihood evaluation and simulation ({code_lines} lines) with standard IDE syntax coloring.</div>
                     </div>
-                    <div class="no-print">
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;" class="no-print">
+                        <button class="action-btn" id="single-code-expand-btn" onclick="toggleSingleCodeExpand()">⤢ Show All Code</button>
                         <button class="action-btn" onclick="copyModelCode()">📋 Copy Python Code</button>
                     </div>
                 </div>
@@ -1268,38 +1347,27 @@ def create_report(
                                 <span class="dot green"></span>
                             </div>
                             <span style="color: #c9d1d9; font-weight: 600;">{getattr(sampler.model, '__name__', 'model')}.py</span>
+                            <span style="font-size: 10px; color: #7ee787; background: rgba(126, 231, 135, 0.1); border: 1px solid rgba(126, 231, 135, 0.2); padding: 1px 6px; border-radius: 4px;">IDE Colors</span>
                         </div>
                         <span style="font-size: 11px; color: #8b949e;">Python • {code_lines} lines</span>
                     </div>
-                    <pre class="code-body"><code id="model-code-block">{escaped_code}</code></pre>
+                    <pre class="code-body" id="single-model-code-pre"><code id="model-code-block">{highlighted_code}</code></pre>
                 </div>
             </div>
 
-            <!-- MODEL METADATA JSON FILE CARD -->
-            <div class="card">
-                <div class="card-header">
+            <!-- COMPANION METADATA DOWNLOAD ACTION (CODE PRESENTATION REMOVED AS REQUESTED) -->
+            <script id="metadata-json-raw" type="application/json">{escaped_json}</script>
+            <div class="card" style="padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 18px;">📁</span>
                     <div>
-                        <div class="card-title">Companion Metadata JSON File</div>
-                        <div class="card-subtitle">Stored alongside the model pickle file as <code>{sampler.model_name}_metadata.json</code> and inside the pickle as <code>sampler.metadata</code></div>
-                    </div>
-                    <div style="display: flex; gap: 8px;" class="no-print">
-                        <button class="action-btn" onclick="copyMetadataJson()">📋 Copy JSON</button>
-                        <button class="action-btn" onclick="downloadMetadataJson('{sampler.model_name}_metadata.json')">💾 Download JSON File</button>
+                        <div style="font-size: 13px; font-weight: 700; color: #1f2328;">Companion Run Metadata File</div>
+                        <div style="font-size: 11px; color: #59636e;">All execution timestamps, dimensions, and hyperparameters shown in this report are serialized in <code>{sampler.model_name}_metadata.json</code>.</div>
                     </div>
                 </div>
-                <div class="code-container">
-                    <div class="code-header">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <div class="code-dots">
-                                <span class="dot red"></span>
-                                <span class="dot yellow"></span>
-                                <span class="dot green"></span>
-                            </div>
-                            <span style="color: #c9d1d9; font-weight: 600;">{sampler.model_name}_metadata.json</span>
-                        </div>
-                        <span style="font-size: 11px; color: #8b949e;">JSON Format</span>
-                    </div>
-                    <pre class="code-body"><code id="metadata-json-block">{escaped_json}</code></pre>
+                <div style="display: flex; gap: 8px;" class="no-print">
+                    <button class="action-btn" onclick="copyMetadataJson()">📋 Copy JSON</button>
+                    <button class="action-btn" onclick="downloadMetadataJson('{sampler.model_name}_metadata.json')">💾 Download JSON</button>
                 </div>
             </div>
 
@@ -1336,6 +1404,25 @@ def create_report(
             window.scrollTo({{ top: 0, behavior: 'smooth' }});
         }}
 
+        var isSingleCodeExpanded = false;
+        function toggleSingleCodeExpand() {{
+            isSingleCodeExpanded = !isSingleCodeExpanded;
+            var pre = document.getElementById('single-model-code-pre');
+            var btn = document.getElementById('single-code-expand-btn');
+            if (pre) {{
+                if (isSingleCodeExpanded) {{
+                    pre.style.maxHeight = 'none';
+                    pre.style.overflowY = 'visible';
+                }} else {{
+                    pre.style.maxHeight = '480px';
+                    pre.style.overflowY = 'auto';
+                }}
+            }}
+            if (btn) {{
+                btn.innerText = isSingleCodeExpanded ? '⤡ Compact Window' : '⤢ Show All Code';
+            }}
+        }}
+
         function copyModelCode() {{
             var el = document.getElementById('model-code-block');
             if (!el) return;
@@ -1347,9 +1434,9 @@ def create_report(
         }}
 
         function copyMetadataJson() {{
-            var el = document.getElementById('metadata-json-block');
+            var el = document.getElementById('metadata-json-raw');
             if (!el) return;
-            navigator.clipboard.writeText(el.innerText).then(function() {{
+            navigator.clipboard.writeText(el.textContent || el.innerText).then(function() {{
                 showToast('✅ Metadata JSON copied to clipboard!');
             }}).catch(function() {{
                 showToast('Failed to copy to clipboard.');
@@ -1357,9 +1444,9 @@ def create_report(
         }}
 
         function downloadMetadataJson(filename) {{
-            var el = document.getElementById('metadata-json-block');
+            var el = document.getElementById('metadata-json-raw');
             if (!el) return;
-            var blob = new Blob([el.innerText], {{ type: 'application/json' }});
+            var blob = new Blob([el.textContent || el.innerText], {{ type: 'application/json' }});
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url;
@@ -1800,7 +1887,7 @@ def compare_models(
     model_code_blocks_html = "".join([
         f"""
         <div id="code-panel-{name}" class="code-panel {'active' if idx == 0 else ''}" style="display: {'block' if idx == 0 else 'none'};">
-            <div class="code-header" style="background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center;">
+            <div class="code-header" style="background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <div style="display: flex; gap: 6px;">
                         <span style="width: 10px; height: 10px; border-radius: 50%; background: #ff5f56; display: inline-block;"></span>
@@ -1808,10 +1895,14 @@ def compare_models(
                         <span style="width: 10px; height: 10px; border-radius: 50%; background: #27c93f; display: inline-block;"></span>
                     </div>
                     <span style="color: #c9d1d9; font-weight: 600; font-size: 12px; font-family: monospace;">{name}.py</span>
+                    <span style="font-size: 10px; color: #7ee787; background: rgba(126, 231, 135, 0.1); border: 1px solid rgba(126, 231, 135, 0.2); padding: 1px 6px; border-radius: 4px;">IDE Colors</span>
                 </div>
-                <button class="action-btn" onclick="copySpecificCode('{name}')" style="font-size: 11px; padding: 4px 8px;">📋 Copy Code</button>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button class="action-btn expand-code-btn" onclick="toggleCodeExpand()" style="font-size: 11px; padding: 4px 8px;">⤢ Show All Code</button>
+                    <button class="action-btn" onclick="copySpecificCode('{name}')" style="font-size: 11px; padding: 4px 8px;">📋 Copy Code</button>
+                </div>
             </div>
-            <pre class="code-body" style="padding: 14px; font-size: 12px; line-height: 1.6; color: #e6edf3; overflow-x: auto; max-height: 380px; margin: 0; background: #0d1117;"><code id="code-content-{name}">{py_html.escape(model_source_codes[name])}</code></pre>
+            <pre class="code-body" id="code-pre-{name}" style="padding: 14px; font-size: 12px; line-height: 1.6; color: #e6edf3; overflow-x: auto; max-height: 380px; margin: 0; background: #0d1117;"><code id="code-content-{name}">{highlight_python_code_html(model_source_codes[name])}</code></pre>
         </div>
         """
         for idx, name in enumerate(model_names)
@@ -2284,16 +2375,19 @@ def compare_models(
                 </div>
             </div>
 
-            <!-- COLLAPSIBLE MODEL FUNCTIONS SOURCE CODE -->
+            <!-- COLLAPSIBLE & EXPANDABLE MODEL FUNCTIONS SOURCE CODE -->
             <div class="card">
                 <div class="card-header">
                     <div>
                         <div class="card-title">Model Function Source Code Inspection</div>
-                        <div class="card-subtitle">Select a model to view its exact Python implementation function. Collapsible to save space.</div>
+                        <div class="card-subtitle">Select a model to view its exact Python implementation with standard IDE syntax coloring. Expand to show full code without inner scrolling, or collapse to save space.</div>
                     </div>
-                    <div style="display: flex; gap: 8px;" class="no-print">
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;" class="no-print">
+                        <button class="action-btn" id="code-expand-toggle-btn" onclick="toggleCodeExpand()" style="color: #0969da; font-weight: 600;">
+                            ⤢ Show All Code
+                        </button>
                         <button class="action-btn" id="code-collapse-toggle-btn" onclick="toggleCodeSection()">
-                            📂 Toggle Collapse
+                            📂 Hide Code
                         </button>
                     </div>
                 </div>
@@ -2403,6 +2497,35 @@ def compare_models(
         }}
 
         var isCodeCollapsed = false;
+        var isCodeExpanded = false;
+        function toggleCodeExpand() {{
+            isCodeExpanded = !isCodeExpanded;
+            var pres = document.querySelectorAll('#code-collapsible-wrapper pre.code-body');
+            var expandBtns = document.querySelectorAll('#code-expand-toggle-btn, .expand-code-btn');
+            var wrapper = document.getElementById('code-collapsible-wrapper');
+            var collapseBtn = document.getElementById('code-collapse-toggle-btn');
+            if (isCodeCollapsed && isCodeExpanded) {{
+                isCodeCollapsed = false;
+                if (wrapper) wrapper.style.display = 'block';
+                if (collapseBtn) collapseBtn.innerText = '📂 Hide Code';
+            }}
+            for (var i = 0; i < pres.length; i++) {{
+                if (isCodeExpanded) {{
+                    pres[i].style.maxHeight = 'none';
+                    pres[i].style.overflowY = 'visible';
+                }} else {{
+                    pres[i].style.maxHeight = '380px';
+                    pres[i].style.overflowY = 'auto';
+                }}
+            }}
+            var btnText = isCodeExpanded ? '⤡ Compact Window' : '⤢ Show All Code';
+            var mainBtn = document.getElementById('code-expand-toggle-btn');
+            if (mainBtn) mainBtn.innerText = btnText;
+            for (var b = 0; b < expandBtns.length; b++) {{
+                expandBtns[b].innerText = btnText;
+            }}
+        }}
+
         function toggleCodeSection() {{
             var wrapper = document.getElementById('code-collapsible-wrapper');
             var btn = document.getElementById('code-collapse-toggle-btn');
