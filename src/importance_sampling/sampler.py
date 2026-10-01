@@ -921,37 +921,40 @@ class Sampler:
         mean_params: Dict[str, List[float]] = {param: [] for param in self.params}
         log_likelihoods: List[float] = []
 
-        subj_indices = range(self.n_subjects)
         pbar = None
         if not disable_progress:
             pbar = tqdm(
-                subj_indices,
+                total=self.n_subjects,
                 desc="  Subjects",
                 unit="subj",
                 leave=leave,
                 file=sys.stdout,
                 dynamic_ncols=True,
                 position=position,
-                mininterval=0.25,
+                mininterval=0.1,
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} subjects finished [{elapsed}<{remaining}]",
             )
-            subj_iter = pbar
-        else:
-            subj_iter = subj_indices
 
         if workers == 1 or self.n_subjects <= 1:
-            for s in subj_iter:
+            for s in range(self.n_subjects):
                 resample, log_mean_ll, s_mean = self.sample_resample(s, n_samples=n_samples)
                 for param in self.params:
                     subject_samples[param].append(resample[param])
                     mean_params[param].append(s_mean[param])
                 log_likelihoods.append(log_mean_ll)
+                finished_num = s + 1
+                if pbar is not None:
+                    pbar.n = finished_num
+                    pbar.refresh()
                 if progress_callback is not None:
-                    progress_callback(s + 1, self.n_subjects)
+                    progress_callback(finished_num, self.n_subjects)
         else:
+            import threading
             # Parallel execution across subjects using thread pool with independent seeded RNGs
             seeds = [int(self.rng.integers(0, 2**31 - 1)) for _ in range(self.n_subjects)]
             results: List[Optional[Tuple[Dict[str, np.ndarray], float, Dict[str, float]]]] = [None] * self.n_subjects
             completed_count = 0
+            lock = threading.Lock()
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, self.n_subjects)) as executor:
                 future_to_subj = {
@@ -960,12 +963,16 @@ class Sampler:
                 }
                 for future in concurrent.futures.as_completed(future_to_subj):
                     s = future_to_subj[future]
-                    results[s] = future.result()
-                    completed_count += 1
-                    if pbar is not None:
-                        pbar.update(1)
-                    if progress_callback is not None:
-                        progress_callback(completed_count, self.n_subjects)
+                    res = future.result()
+                    results[s] = res
+                    with lock:
+                        completed_count += 1
+                        finished_num = completed_count
+                        if pbar is not None:
+                            pbar.n = finished_num
+                            pbar.refresh()
+                        if progress_callback is not None:
+                            progress_callback(finished_num, self.n_subjects)
 
             for s in range(self.n_subjects):
                 res = results[s]
@@ -976,8 +983,11 @@ class Sampler:
                         mean_params[param].append(s_mean[param])
                     log_likelihoods.append(log_mean_ll)
 
-        if pbar is not None and not leave:
-            pbar.close()
+        if pbar is not None:
+            pbar.n = self.n_subjects
+            pbar.refresh()
+            if not leave:
+                pbar.close()
 
         # Pool particles across all subjects to update population distribution
         pooled_samples = {
@@ -1139,6 +1149,10 @@ class Sampler:
         iter_mode = "iteration" if progress_bar in (True, "iteration", "iter", "per_iteration") else progress_bar
 
         if iter_mode in ("overall", "single"):
+            bar_format = (
+                "{desc}: {percentage:3.0f}%|{bar}| "
+                "{n_fmt}/{total_fmt} iters [{elapsed}<{remaining}{postfix}]"
+            )
             overall_pbar = tqdm(
                 range(n_iterations),
                 desc=f"Fitting {self.model_name}",
@@ -1146,16 +1160,23 @@ class Sampler:
                 leave=True,
                 file=sys.stdout,
                 dynamic_ncols=True,
+                bar_format=bar_format,
             )
         else:
             overall_pbar = None
+
+        import threading
 
         for i in range(n_iterations):
             iter_start = time.time()
             current_iter_num = i + 1
 
-            # Per-iteration progress bar that fills across subjects
+            # Per-iteration progress bar with explicit percentage and finished subject count
             if iter_mode == "iteration":
+                bar_format = (
+                    "{desc}: {percentage:3.0f}%|{bar}| "
+                    "{n_fmt}/{total_fmt} subjects finished [{elapsed}<{remaining}{postfix}]"
+                )
                 iter_pbar = tqdm(
                     total=self.n_subjects,
                     desc=f"Iter {current_iter_num:>{len(str(n_iterations))}}/{n_iterations}",
@@ -1163,16 +1184,26 @@ class Sampler:
                     leave=True,
                     file=sys.stdout,
                     dynamic_ncols=True,
+                    bar_format=bar_format,
                 )
             else:
                 iter_pbar = None
 
-            def _on_subj_progress(curr: int, total: int) -> None:
-                if iter_pbar is not None:
-                    iter_pbar.update(1)
-                elif overall_pbar is not None and hasattr(overall_pbar, "set_postfix"):
-                    if curr == total or curr % max(1, total // 5) == 0:
-                        overall_pbar.set_postfix({"subj": f"{curr}/{total}"}, refresh=True)
+            progress_lock = threading.Lock()
+
+            def _on_subj_progress(finished_count: int, total_count: int) -> None:
+                with progress_lock:
+                    if iter_pbar is not None:
+                        # Strictly assign n to the monotonic count of finished subjects (never jumps back and forth)
+                        iter_pbar.n = min(finished_count, total_count)
+                        iter_pbar.refresh()
+                    elif overall_pbar is not None and hasattr(overall_pbar, "set_postfix"):
+                        pct = (finished_count / total_count) * 100 if total_count > 0 else 0
+                        if finished_count == total_count or finished_count % max(1, total_count // 10) == 0:
+                            overall_pbar.set_postfix(
+                                {"finished": f"{finished_count}/{total_count} ({pct:.0f}%)"},
+                                refresh=True,
+                            )
 
             # Within-iteration progress across subjects (parallelized when n_jobs > 1 or n_jobs == -1)
             self.adjust_hyper_priors(
@@ -1218,8 +1249,14 @@ class Sampler:
             }
 
             if iter_pbar is not None:
-                iter_pbar.set_postfix(summary_postfix, refresh=True)
-                iter_pbar.close()
+                with progress_lock:
+                    iter_pbar.n = self.n_subjects
+                    iter_pbar.bar_format = (
+                        "{desc}: 100%|{bar}| "
+                        "{n_fmt}/{total_fmt} subjects finished [{elapsed}{postfix}]"
+                    )
+                    iter_pbar.set_postfix(summary_postfix, refresh=True)
+                    iter_pbar.close()
 
             if overall_pbar is not None:
                 overall_pbar.update(1)
