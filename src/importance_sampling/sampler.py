@@ -470,12 +470,16 @@ class Sampler:
         group_column: str = "group",
         params_with_group_diff: Optional[Union[Dict[str, str], Sequence[str]]] = None,
         n_jobs: int = 1,
+        random_ll: Optional[float] = None,
     ):
         self.data = list(data)
         self.model = model
 
         # Parallelism configuration: n_jobs=1 (sequential), n_jobs>1 or n_jobs=-1 (parallel across subjects)
         self.n_jobs = n_jobs
+
+        # User-specified random baseline log-likelihood (0 parameters, random BIC = -2 * random_ll)
+        self.random_ll = float(random_ll) if random_ll is not None else None
 
         # Number of choice options available per decision (e.g. 2 for a two-armed bandit).
         # This is the amount of choices the likelihood is based on and is important for the BIC calculations.
@@ -1550,8 +1554,8 @@ class Sampler:
             timestamp=timestamp,
         )
 
-    def summary(self) -> None:
-        """Print fit summary statistics."""
+    def summary(self, random_ll: Optional[float] = None) -> None:
+        """Print fit summary statistics, with optional benchmark comparison to random baseline."""
         final_ev = self.evidence[-1] if self.evidence else np.nan
         final_bic = self.BIC[-1] if self.BIC else np.nan
         final_acc = self.mean_accuracy[-1] if self.mean_accuracy else np.nan
@@ -1565,6 +1569,22 @@ class Sampler:
         print("Evidence (total):     ", round(final_ev, 4))
         print("Mean accuracy:        ", round(final_acc, 4))
         print("BIC:                  ", round(final_bic, 4))
+
+        eff_random_ll = random_ll if random_ll is not None else self.random_ll
+        if eff_random_ll is not None and not np.isnan(final_ev):
+            # Baseline has 0 free parameters (k=0), so BIC_rand = -2 * LL_rand
+            random_bic = -2.0 * float(eff_random_ll)
+            d_ll = final_ev - eff_random_ll
+            d_bic = final_bic - random_bic
+            pseudo_r2 = 1.0 - (final_ev / eff_random_ll) if eff_random_ll != 0 else np.nan
+            print("\n--- Benchmark Comparison to Random Baseline (k=0) ---")
+            print(f"Random Baseline LL:   {eff_random_ll:10.4f}")
+            print(f"Random Baseline BIC:  {random_bic:10.4f} (penalty = 0)")
+            print(f"ΔLL (vs Random):      {d_ll:+10.4f} ({'better than chance' if d_ll > 0 else 'worse than chance'})")
+            print(f"ΔBIC (vs Random):     {d_bic:+10.4f} ({'decisive evidence' if d_bic < -10 else 'no evidence'})")
+            if not np.isnan(pseudo_r2):
+                print(f"McFadden's Pseudo-R²: {pseudo_r2:10.4f}")
+
         print("\nFitted Hyper-Priors:")
         for p in self.params:
             mu = round(self.hyper_params[p]["mean"], 4)
@@ -1576,14 +1596,11 @@ class Sampler:
         filename: Optional[str] = None,
         show: bool = True,
         transformed: bool = True,
+        params_to_plot: Optional[Sequence[str]] = None,
+        random_ll: Optional[float] = None,
         renderer: Optional[str] = None,
     ) -> Any:
         """Generate an interactive report widget for model diagnostics and results.
-
-        Visualizes:
-        1. Hyperparameter evolution across iterations (solid line for mean, shaded area for +/- 1 SD).
-        2. Model fit and evidence convergence (total evidence and BIC).
-        3. Individual subject posterior means and parameter distribution.
 
         Parameters
         ----------
@@ -1594,16 +1611,19 @@ class Sampler:
             Whether to display the interactive figure in the current environment
             (e.g., Jupyter notebook, Google Colab, or browser).
         transformed : bool, default=True
-            If True, displays hyperparameters transformed into their valid domain bounds
-            (e.g., [0, 1] for learning rate, strictly positive for inverse temperature).
-            If False, displays parameters in latent normal space.
+            If True, displays hyperparameters transformed into their valid domain bounds.
+        params_to_plot : Optional[Sequence[str]], default=None
+            Subset of parameter keys to visualize in evolution and subject plots.
+        random_ll : Optional[float], default=None
+            User-provided log-likelihood for random chance baseline (0 parameters).
+            Used to calculate random BIC (-2 * random_ll) and display benchmark comparison metrics.
         renderer : Optional[str], default=None
-            Plotly renderer to use when displaying the figure (e.g., 'browser', 'notebook', 'colab').
+            Plotly renderer to use when displaying the figure.
 
         Returns
         -------
-        plotly.graph_objects.Figure
-            The interactive Plotly Figure object containing the multi-panel report.
+        ReportDashboard
+            The interactive report dashboard object.
         """
         from importance_sampling.report import create_report as _create_report_func
 
@@ -1612,6 +1632,8 @@ class Sampler:
             filename=filename,
             show=show,
             transformed=transformed,
+            params_to_plot=params_to_plot,
+            random_ll=random_ll if random_ll is not None else self.random_ll,
             renderer=renderer,
         )
 

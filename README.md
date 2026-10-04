@@ -351,6 +351,7 @@ sampler.create_report(
     filename: Optional[str] = None,
     show: bool = True,
     transformed: bool = True,
+    random_ll: Optional[float] = None,
     renderer: Optional[str] = None,
 ) -> Any
 ```
@@ -366,24 +367,26 @@ Generates an interactive multi-page diagnostic report widget powered by Plotly. 
 * **`transformed`** (`bool`, default=`True`):
   * `True`: Displays hyperparameters in their valid domain space (e.g. learning rate in $[0, 1]$, inverse temperature $> 0$).
   * `False`: Displays hyperparameters in latent normal space.
+* **`random_ll`** (`Optional[float]`, default=`None`):
+  User-specified random chance baseline log-likelihood. When provided, the report treats the random baseline as having $k=0$ free parameters ($\text{BIC}_{\text{rand}} = -2 \times \text{LL}_{\text{rand}}$) and displays benchmark reference lines on evidence and BIC curves, along with $\Delta\text{LL}$ and $\Delta\text{BIC}$ difference metrics.
 * **`renderer`** (`Optional[str]`, default=`None`):
   Plotly renderer option (e.g., `'browser'`, `'notebook'`, `'colab'`).
 
 #### Multi-Page Single Model Report Layout
 
 1. **Page 1: General Fit & Convergence**:
-   * **Total Evidence (Log Likelihood) & BIC**: Dual-axis trajectory showing total model evidence climbing and BIC minimizing across iterations.
+   * **Total Evidence (Log Likelihood) & BIC**: Trajectory showing total model evidence climbing and BIC minimizing across iterations, with dashed reference lines for chance baseline if `random_ll` is provided.
    * **Subject-Level Evidence Spaghetti Plot**: Trajectories of log marginal likelihood for each individual subject, alongside the population mean trajectory.
-   * **Convergence Summary Metrics**: Total evidence, BIC, iteration count, duration, and convergence criteria status.
+   * **Convergence Summary Metrics**: Total evidence, BIC, iteration count, duration, and convergence criteria status, with $\Delta\text{LL}$ and $\Delta\text{BIC}$ relative to the random benchmark.
 2. **Page 2: Model Parameters & Subject Distributions**:
    * **Model Parameters Summary Table**: Raw parameter names, fitted population means, standard deviations, and ±1 SD credible intervals.
-   * **Hyperparameter Evolution Grid (3 Plots per Row)**: Mean trajectories and translucent shaded $\pm 1 \text{ SD}$ bands across iterations for each parameter.
+   * **Hyperparameter Evolution Grid (3 Plots per Row)**: Mean trajectories and translucent shaded $\pm 1 \text{ SD}$ bands across iterations for each parameter, using a unified color for all parameters and their grand mean, and two dedicated colors for group differences.
    * **Individual Subject Posterior Means (Scatter Plot per Parameter)**: Subject-by-subject posterior draws plotted along the X-axis for each parameter to visualize between-subject heterogeneity.
    * **Latent Correlation Matrix Heatmap**: Full bivariate correlation heatmap ($r \in [-1.0, 1.0]$) between parameters in latent normal space.
 3. **Page 3: Model Code & Run Metadata**:
    * **Run Metadata Cards**: Execution timestamps (start time, finish time, formatted duration), number of iterations, subject counts, particle counts, and system environment (Python & OS versions).
    * **Model Source Code Box**: Embedded, syntax-highlighted Python function code used to fit the model, complete with one-click copy.
-   * **Companion JSON Metadata Viewer**: Full JSON dump of the model metadata snapshot saved alongside the model pickle.
+   * **Companion JSON Metadata Action**: Direct download and clipboard copy action for the serialized companion metadata JSON file (`{model_name}_metadata.json`).
 
 ---
 
@@ -398,6 +401,7 @@ compare_models(
     show: bool = True,
     compare_params: Optional[Sequence[str]] = None,  # Defaults to ALL parameters across models
     transformed: bool = True,
+    random_ll: Optional[float] = None,  # Chance baseline log-likelihood benchmark
     renderer: Optional[str] = None,
 ) -> Any
 ```
@@ -407,8 +411,8 @@ Generates an interactive comparative report widget to evaluate two or more fitte
 #### Multi-Page Comparison Layout
 
 1. **Page 1: Likelihood, BICs & Participant Selection**:
-   * **Total Evidence & BIC Trajectories**: Overlay of evidence and BIC evolution across iterations for all models.
-   * **Final Model Ranking Table**: Ranks models by BIC (lowest is best), reporting $k$ parameters, Final Evidence, Final BIC, and $\Delta\text{BIC}$ relative to the winning model.
+   * **Total Evidence & BIC Trajectories**: Overlay of evidence and BIC evolution across iterations for all models, with chance benchmark reference lines.
+   * **Final Model Ranking Table**: Ranks models by BIC (lowest is best), reporting $k$ parameters, Final Evidence, Final BIC, $\Delta\text{BIC}$ relative to the winning model, plus $\Delta\text{LL}$ (vs Random) and $\Delta\text{BIC}$ (vs Random) with a dedicated Random Baseline ($k=0$) row.
    * **Percentage of Participants Best Explained**: Reports the percentage and exact subject counts where each model achieved the highest individual log-marginal likelihood $\ln p(D_s \mid M)$.
 2. **Page 2: Parameter Inclusion Matrix & Collapsible Code**:
    * **Parameter Overview Matrix Table**: Parameters listed on the Y-axis, compared models on the X-axis. Clean visual matrix with filled squares for included parameters, center dots for parameters with group differences, and dashed outlines for excluded parameters, accompanied by concise model descriptions.

@@ -168,6 +168,7 @@ def create_report(
     show: bool = True,
     transformed: bool = True,
     params_to_plot: Optional[Sequence[str]] = None,
+    random_ll: Optional[float] = None,
     renderer: Optional[str] = None,
 ) -> ReportDashboard:
     """Generate a clean, beautiful, interactive HTML diagnostic report for a fitted model.
@@ -192,6 +193,9 @@ def create_report(
         If False, displays parameters in latent standard normal space.
     params_to_plot : Optional[Sequence[str]], default=None
         Subset of parameter keys to visualize in evolution and subject plots. If None, plots all parameters.
+    random_ll : Optional[float], default=None
+        User-provided chance baseline log-likelihood (0 parameters). Used to compute random BIC
+        (-2 * random_ll) and display benchmark comparison metrics across the report.
     renderer : Optional[str], default=None
         Plotly renderer option if displaying a figure directly.
 
@@ -212,6 +216,9 @@ def create_report(
     active_params = [p for p in params_to_plot if p in all_params] if params_to_plot else all_params
     iters = list(range(len(sampler.hyper_params_list)))
     fit_iters = list(range(len(sampler.evidence)))
+
+    eff_random_ll = float(random_ll) if random_ll is not None else getattr(sampler, "random_ll", None)
+    eff_random_bic = (-2.0 * eff_random_ll) if eff_random_ll is not None else None
 
     palette = [
         "#0969da",
@@ -249,6 +256,18 @@ def create_report(
         )
     )
 
+    if eff_random_ll is not None and fit_iters:
+        fig_fit.add_trace(
+            go.Scatter(
+                x=[fit_iters[0], fit_iters[-1]],
+                y=[eff_random_ll, eff_random_ll],
+                mode="lines",
+                line=dict(color="#8c959f", width=1.8, dash="dot"),
+                name=f"Random LL ({eff_random_ll:.1f})",
+                hovertemplate=f"<b>Random Benchmark (k=0)</b><br>LL: {eff_random_ll:.2f}<extra></extra>",
+            )
+        )
+
     if sampler.BIC:
         fig_fit.add_trace(
             go.Scatter(
@@ -260,6 +279,19 @@ def create_report(
                 name="BIC",
                 yaxis="y2",
                 hovertemplate="Iter %{x}<br><b>BIC</b>: %{y:.2f}<extra></extra>",
+            )
+        )
+
+    if eff_random_bic is not None and fit_iters and sampler.BIC:
+        fig_fit.add_trace(
+            go.Scatter(
+                x=[fit_iters[0], fit_iters[-1]],
+                y=[eff_random_bic, eff_random_bic],
+                mode="lines",
+                line=dict(color="#d97706", width=1.8, dash="dot"),
+                name=f"Random BIC ({eff_random_bic:.1f})",
+                yaxis="y2",
+                hovertemplate=f"<b>Random Benchmark (k=0)</b><br>BIC: {eff_random_bic:.2f}<extra></extra>",
             )
         )
 
@@ -632,6 +664,20 @@ def create_report(
     fit_duration_secs = f"{getattr(sampler, 'total_fit_time', 0.0):.2f}s"
     iterations_run = getattr(sampler, "iterations", 0)
     model_desc_str = getattr(sampler, "description", "") or metadata.get("description", "")
+
+    # Benchmark comparison metrics vs Random Chance Baseline (k=0 free parameters)
+    d_ll_rand_badge = ""
+    d_bic_rand_badge = ""
+
+    if eff_random_ll is not None and sampler.evidence:
+        final_ev_val = sampler.evidence[-1]
+        final_bic_val = sampler.BIC[-1] if sampler.BIC else None
+        d_ll_val = final_ev_val - eff_random_ll
+        d_bic_val = (final_bic_val - eff_random_bic) if (final_bic_val is not None and eff_random_bic is not None) else None
+
+        d_ll_rand_badge = f'<div style="font-size: 11px; color: {"#1a7f37" if d_ll_val > 0 else "#cf222e"}; font-weight: 600; margin-top: 2px;">{d_ll_val:+.2f} vs Random</div>'
+        if d_bic_val is not None:
+            d_bic_rand_badge = f'<div style="font-size: 11px; color: {"#1a7f37" if d_bic_val < 0 else "#cf222e"}; font-weight: 600; margin-top: 2px;">{d_bic_val:+.2f} vs Random</div>'
 
     # Extract user model Python source code
     model_code_str = getattr(sampler, "model_code", "") or metadata.get("model_code", "")
@@ -1073,10 +1119,12 @@ def create_report(
                 <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
                     <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Total Evidence</div>
                     <div style="font-size: 18px; font-weight: 700; color: #0969da;">{final_evidence_str}</div>
+                    {d_ll_rand_badge}
                 </div>
                 <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: center;">
                     <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Final BIC</div>
                     <div style="font-size: 18px; font-weight: 700; color: #1a7f37;">{final_bic_str}</div>
+                    {d_bic_rand_badge}
                 </div>
             </div>
         </div>
@@ -1515,6 +1563,7 @@ def compare_models(
     show: bool = True,
     compare_params: Optional[Sequence[str]] = None,
     transformed: bool = True,
+    random_ll: Optional[float] = None,
     renderer: Optional[str] = None,
 ) -> ReportDashboard:
     """Compare multiple computational models across Likelihood/BICs, Parameter Inclusion, and Parameter Evolutions.
@@ -1536,6 +1585,9 @@ def compare_models(
         List of parameter keys to compare. Defaults to ALL unique parameters across all compared models.
     transformed : bool, default=True
         If True, displays parameters in their valid domain space. If False, displays latent normal values.
+    random_ll : Optional[float], default=None
+        User-provided chance baseline log-likelihood (0 parameters). Used to compute random BIC
+        (-2 * random_ll) and display benchmark comparison metrics and reference lines across all models.
     renderer : Optional[str], default=None
         Plotly renderer option.
 
@@ -1663,6 +1715,19 @@ def compare_models(
     }
 
     # -------------------------------------------------------------------------
+    # Optional Chance Baseline Benchmark (k=0 free parameters)
+    # -------------------------------------------------------------------------
+    eff_random_ll = (
+        float(random_ll)
+        if random_ll is not None
+        else next(
+            (getattr(s, "random_ll", None) for s in model_dict.values() if getattr(s, "random_ll", None) is not None),
+            None,
+        )
+    )
+    eff_random_bic = (-2.0 * eff_random_ll) if eff_random_ll is not None else None
+
+    # -------------------------------------------------------------------------
     # PAGE 1: Evidence & BIC Evolution + Participant Breakdown Plots
     # -------------------------------------------------------------------------
     fig_ev = go.Figure()
@@ -1679,6 +1744,21 @@ def compare_models(
                 hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: Ev = %{{y:.2f}}<extra></extra>",
             )
         )
+
+    if eff_random_ll is not None:
+        max_ev_iters = max((len(m.evidence) for m in model_dict.values()), default=1)
+        if max_ev_iters > 0:
+            fig_ev.add_trace(
+                go.Scatter(
+                    x=[0, max_ev_iters - 1],
+                    y=[eff_random_ll, eff_random_ll],
+                    mode="lines",
+                    line=dict(color="#8c959f", width=1.8, dash="dot"),
+                    name=f"Random LL ({eff_random_ll:.1f})",
+                    hovertemplate=f"<b>Random Benchmark (k=0)</b><br>LL: {eff_random_ll:.2f}<extra></extra>",
+                )
+            )
+
     fig_ev.update_layout(
         template="plotly_white",
         height=280,
@@ -1705,6 +1785,21 @@ def compare_models(
                     hovertemplate=f"<b>{name}</b><br>Iter %{{x}}: BIC = %{{y:.2f}}<extra></extra>",
                 )
             )
+
+    if eff_random_bic is not None:
+        max_bic_iters = max((len(m.BIC) for m in model_dict.values() if m.BIC), default=1)
+        if max_bic_iters > 0:
+            fig_bic.add_trace(
+                go.Scatter(
+                    x=[0, max_bic_iters - 1],
+                    y=[eff_random_bic, eff_random_bic],
+                    mode="lines",
+                    line=dict(color="#8c959f", width=1.8, dash="dot"),
+                    name=f"Random BIC ({eff_random_bic:.1f})",
+                    hovertemplate=f"<b>Random Benchmark (k=0)</b><br>BIC: {eff_random_bic:.2f}<extra></extra>",
+                )
+            )
+
     fig_bic.update_layout(
         template="plotly_white",
         height=280,
@@ -1739,8 +1834,7 @@ def compare_models(
     )
     div_subj_bar = to_html(fig_subj_bar, include_plotlyjs=False, full_html=False, config=plotly_config)
 
-    # Comparison Ranking Table Rows
-    # Comparison Ranking Table Rows (with Model Description)
+    # Comparison Ranking Table Rows (with Model Description and optional Random Benchmark columns)
     comp_rows_html = ""
     for idx in sorted_indices:
         m_name = model_names[idx]
@@ -1750,6 +1844,15 @@ def compare_models(
         badge_style = "background: #1a7f37; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 700;" if is_winner else "color: #59636e;"
         pct_display = f"{subj_win_pct[m_name]:.1f}% ({subj_wins[m_name]}/{n_subjects})" if has_subj_evidence else "N/A"
         m_desc = model_descriptions.get(m_name, "")
+
+        rand_cols_html = ""
+        if eff_random_ll is not None:
+            d_ll_r = final_evidence[idx] - eff_random_ll
+            d_bic_r = final_bic[idx] - eff_random_bic
+            rand_cols_html = f"""
+            <td style="padding: 10px 14px; font-family: monospace; color: {'#1a7f37' if d_ll_r > 0 else '#cf222e'}; font-weight: 600;">{d_ll_r:+.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: {'#1a7f37' if d_bic_r < 0 else '#cf222e'}; font-weight: 600;">{d_bic_r:+.2f}</td>
+            """
 
         comp_rows_html += f"""
         <tr style="border-bottom: 1px solid #eaeef2; {'background: rgba(26, 127, 55, 0.04);' if is_winner else ''}">
@@ -1765,8 +1868,48 @@ def compare_models(
             <td style="padding: 10px 14px; font-family: monospace; color: #0969da;">{final_evidence[idx]:.2f}</td>
             <td style="padding: 10px 14px; font-family: monospace; font-weight: 700;">{final_bic[idx]:.2f}</td>
             <td style="padding: 10px 14px; font-family: monospace; color: {'#1a7f37' if is_winner else '#cf222e'}; font-weight: 600;">{d_bic_str}</td>
+            {rand_cols_html}
             <td style="padding: 10px 14px; font-family: monospace; font-weight: 600; color: #8250df;">{pct_display}</td>
         </tr>
+        """
+
+    # Add Random Baseline row to ranking table if benchmark provided
+    if eff_random_ll is not None:
+        d_bic_rand_vs_best = eff_random_bic - best_bic
+        comp_rows_html += f"""
+        <tr style="border-bottom: 1px solid #eaeef2; background: #f6f8fa;">
+            <td style="padding: 10px 14px;"><span style="background: #8c959f; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 10px;">Benchmark</span></td>
+            <td style="padding: 10px 14px; font-weight: 700; font-family: monospace; color: #59636e;">
+                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #8c959f; margin-right: 6px;"></span>
+                Random Baseline
+            </td>
+            <td style="padding: 10px 14px; color: #59636e; font-size: 11px; max-width: 200px; line-height: 1.3;">
+                Chance benchmark (k=0)
+            </td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">0</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">{eff_random_ll:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; font-weight: 700; color: #59636e;">{eff_random_bic:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #cf222e; font-weight: 600;">+{d_bic_rand_vs_best:.2f}</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">0.0</td>
+            <td style="padding: 10px 14px; font-family: monospace; color: #59636e;">0.0</td>
+            <td style="padding: 10px 14px; font-family: monospace; font-weight: 600; color: #8c959f;">—</td>
+        </tr>
+        """
+
+    random_table_headers_html = """
+        <th>ΔLL (vs Random)</th>
+        <th>ΔBIC (vs Random)</th>
+    """ if eff_random_ll is not None else ""
+
+    random_header_pill_html = ""
+    if eff_random_ll is not None:
+        random_header_pill_html = f"""
+        <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 8px 14px; text-align: right; font-family: monospace;">
+            <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Random (k=0)</div>
+            <div style="font-size: 14px; font-weight: 700; color: #59636e; margin-top: 2px;">
+                LL: {eff_random_ll:.2f} &bull; BIC: {eff_random_bic:.2f}
+            </div>
+        </div>
         """
 
     # -------------------------------------------------------------------------
@@ -2214,10 +2357,13 @@ def compare_models(
                     <strong>{n_subjects}</strong> subjects evaluated
                 </p>
             </div>
-            <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: right;">
-                <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Best Model (Lowest BIC)</div>
-                <div style="font-size: 16px; font-weight: 700; color: #1a7f37; font-family: monospace;">
-                    {model_names[sorted_indices[0]]} (BIC: {final_bic[sorted_indices[0]]:.1f})
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                {random_header_pill_html}
+                <div style="background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px; padding: 10px 16px; text-align: right;">
+                    <div style="font-size: 10px; text-transform: uppercase; color: #59636e; font-weight: 600;">Best Model (Lowest BIC)</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #1a7f37; font-family: monospace;">
+                        {model_names[sorted_indices[0]]} (BIC: {final_bic[sorted_indices[0]]:.1f})
+                    </div>
                 </div>
             </div>
         </div>
@@ -2297,6 +2443,7 @@ def compare_models(
                                     <th>Evidence</th>
                                     <th>BIC</th>
                                     <th>ΔBIC</th>
+                                    {random_table_headers_html}
                                     <th>Best Explained %</th>
                                 </tr>
                             </thead>

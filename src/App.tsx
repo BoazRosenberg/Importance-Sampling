@@ -332,10 +332,10 @@ const COMPARISON_MODELS: Record<string, ModelComparisonEntry> = {
     alphaSubjects: [0.39, 0.44, 0.37, 0.47, 0.41, 0.35, 0.46, 0.39, 0.43, 0.41],
     betaSubjects:  [3.00, 2.70, 3.25, 2.45, 2.95, 3.40, 2.60, 3.10, 2.75, 2.85],
   },
-  Random_Baseline: {
-    name: 'Random_Baseline',
+  Biased_Baseline: {
+    name: 'Biased_Baseline',
     description: '1-parameter baseline with constant response bias',
-    color: '#cf222e',
+    color: '#d97706',
     k: 1,
     params: ['bias'],
     groupDiffParams: [],
@@ -478,7 +478,7 @@ export default function App() {
     'QLearn_Pers',
     'Standard_QLearn',
     'Dual_Alpha_QLearn',
-    'Random_Baseline',
+    'Biased_Baseline',
   ]);
   const [comparisonSubTab, setComparisonSubTab] = useState<'fit' | 'matrix' | 'evolution'>('fit');
   const [selectedCodeModel, setSelectedCodeModel] = useState<string>('QLearn_Pers');
@@ -486,6 +486,11 @@ export default function App() {
   const [isCodeExpanded, setIsCodeExpanded] = useState<boolean>(false);
   const [isSingleModelCodeExpanded, setIsSingleModelCodeExpanded] = useState<boolean>(false);
   const [copiedCompareCode, setCopiedCompareCode] = useState<boolean>(false);
+
+  // Random baseline benchmark (k=0 free parameters, random BIC = -2 * random_ll)
+  // Passed as argument to report function: compare_models(..., random_ll=-250.0) / create_report(..., random_ll=-250.0)
+  const randomLL: number | null = -250.0;
+  const randomBIC = randomLL !== null ? -2.0 * randomLL : null;
 
   const handleCopyCompareCode = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -565,8 +570,13 @@ export default function App() {
   const fitPad = { top: 20, right: 25, bottom: 30, left: 50 };
 
   const getFitX = (it: number) => fitPad.left + (it / 11) * (fitW - fitPad.left - fitPad.right);
-  const evMin = Math.min(...mockEvidence);
-  const evMax = Math.max(...mockEvidence);
+
+
+
+  const allSingleEv = [...mockEvidence];
+  if (randomLL !== null) allSingleEv.push(randomLL);
+  const evMin = Math.min(...allSingleEv);
+  const evMax = Math.max(...allSingleEv);
   const evRange = evMax - evMin || 1;
   const getEvY = (val: number) =>
     fitH - fitPad.bottom - ((val - evMin) / evRange) * (fitH - fitPad.top - fitPad.bottom);
@@ -576,19 +586,23 @@ export default function App() {
     .join(' ');
 
   // Comparison metrics calculations
-  const activeModelList = selectedModels.map((m) => COMPARISON_MODELS[m]);
-  const bestBicVal = Math.min(...activeModelList.map((m) => m.finalBIC));
+  const activeModelList = selectedModels.map((m) => COMPARISON_MODELS[m]).filter(Boolean);
+  const bestBicVal = activeModelList.length > 0 ? Math.min(...activeModelList.map((m) => m.finalBIC)) : 0;
   const sortedModels = [...activeModelList].sort((a, b) => a.finalBIC - b.finalBIC);
 
-  // Comparison chart ranges
-  const compEvMin = Math.min(...activeModelList.flatMap((m) => m.evidenceHistory));
-  const compEvMax = Math.max(...activeModelList.flatMap((m) => m.evidenceHistory));
+  // Comparison chart ranges (including Random benchmark reference line when active)
+  const allCompEv = activeModelList.flatMap((m) => m.evidenceHistory);
+  if (randomLL !== null) allCompEv.push(randomLL);
+  const compEvMin = allCompEv.length > 0 ? Math.min(...allCompEv) : -300;
+  const compEvMax = allCompEv.length > 0 ? Math.max(...allCompEv) : -100;
   const compEvRange = compEvMax - compEvMin || 1;
   const getCompEvY = (v: number) =>
     fitH - fitPad.bottom - ((v - compEvMin) / compEvRange) * (fitH - fitPad.top - fitPad.bottom);
 
-  const compBicMin = Math.min(...activeModelList.flatMap((m) => m.bicHistory));
-  const compBicMax = Math.max(...activeModelList.flatMap((m) => m.bicHistory));
+  const allCompBic = activeModelList.flatMap((m) => m.bicHistory);
+  if (randomBIC !== null) allCompBic.push(randomBIC);
+  const compBicMin = allCompBic.length > 0 ? Math.min(...allCompBic) : 200;
+  const compBicMax = allCompBic.length > 0 ? Math.max(...allCompBic) : 600;
   const compBicRange = compBicMax - compBicMin || 1;
   const getCompBicY = (v: number) =>
     fitH - fitPad.bottom - ((v - compBicMin) / compBicRange) * (fitH - fitPad.top - fitPad.bottom);
@@ -692,17 +706,30 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Winner pill */}
-              <div className="bg-[#f6f8fa] border border-[#d1d9e0] px-4 py-2.5 rounded-lg flex items-center gap-3">
-                <Award className="w-6 h-6 text-[#1a7f37]" />
-                <div>
-                  <div className="text-[10px] uppercase font-bold tracking-wider text-[#59636e]">
-                    Best Model (Lowest BIC)
-                  </div>
-                  <div className="text-sm font-bold font-mono text-[#1a7f37]">
-                    {sortedModels[0].name} (BIC {sortedModels[0].finalBIC.toFixed(1)})
+              {/* Winner pill and Benchmark pill */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="bg-[#f6f8fa] border border-[#d1d9e0] px-4 py-2.5 rounded-lg flex items-center gap-3">
+                  <Award className="w-5 h-5 text-[#1a7f37]" />
+                  <div>
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-[#59636e]">
+                      Best Model (Lowest BIC)
+                    </div>
+                    <div className="text-sm font-bold font-mono text-[#1a7f37]">
+                      {sortedModels[0].name} (BIC {sortedModels[0].finalBIC.toFixed(1)})
+                    </div>
                   </div>
                 </div>
+
+                {randomLL !== null && randomBIC !== null && (
+                  <div className="bg-[#f6f8fa] border border-[#d1d9e0] px-4 py-2.5 rounded-lg font-mono">
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-[#59636e]">
+                      Random Baseline (k=0)
+                    </div>
+                    <div className="text-xs font-bold text-[#59636e] mt-0.5">
+                      LL: {randomLL.toFixed(1)} &bull; BIC: {randomBIC.toFixed(1)}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -791,6 +818,8 @@ export default function App() {
               </div>
             </div>
 
+
+
             {/* ============================================================== */}
             {/* PAGE 1: FIT & BICS + PARTICIPANT BEST-EXPLAINED BREAKDOWN      */}
             {/* ============================================================== */}
@@ -809,6 +838,8 @@ export default function App() {
                     Page 1 of 3
                   </span>
                 </div>
+
+
 
                 {/* 1. EVOLUTION PLOTS: EVIDENCE & BIC */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -838,6 +869,32 @@ export default function App() {
                         );
                       })}
 
+                      {/* Random LL Benchmark Reference Line */}
+                      {randomLL !== null && (
+                        <g>
+                          <line
+                            x1={fitPad.left}
+                            y1={getCompEvY(randomLL)}
+                            x2={fitW - fitPad.right}
+                            y2={getCompEvY(randomLL)}
+                            stroke="#8c959f"
+                            strokeWidth="1.8"
+                            strokeDasharray="4 3"
+                          />
+                          <text
+                            x={fitW - fitPad.right}
+                            y={getCompEvY(randomLL) - 4}
+                            textAnchor="end"
+                            fontSize="10"
+                            fill="#59636e"
+                            fontFamily="monospace"
+                            fontWeight="600"
+                          >
+                            Random LL ({randomLL.toFixed(1)})
+                          </text>
+                        </g>
+                      )}
+
                       {/* Line for each model */}
                       {activeModelList.map((m) => {
                         const pathD = m.evidenceHistory
@@ -863,6 +920,13 @@ export default function App() {
                           <strong className="text-[#1f2328]">{m.finalEvidence.toFixed(1)}</strong>
                         </div>
                       ))}
+                      {randomLL !== null && (
+                        <div className="flex items-center gap-1.5 text-[#59636e]">
+                          <span className="w-3 h-0.5 border-t border-[#8c959f] border-dashed" />
+                          <span>Random:</span>
+                          <strong>{randomLL.toFixed(1)}</strong>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -892,6 +956,32 @@ export default function App() {
                         );
                       })}
 
+                      {/* Random BIC Benchmark Reference Line */}
+                      {randomBIC !== null && (
+                        <g>
+                          <line
+                            x1={fitPad.left}
+                            y1={getCompBicY(randomBIC)}
+                            x2={fitW - fitPad.right}
+                            y2={getCompBicY(randomBIC)}
+                            stroke="#8c959f"
+                            strokeWidth="1.8"
+                            strokeDasharray="4 3"
+                          />
+                          <text
+                            x={fitW - fitPad.right}
+                            y={getCompBicY(randomBIC) - 4}
+                            textAnchor="end"
+                            fontSize="10"
+                            fill="#59636e"
+                            fontFamily="monospace"
+                            fontWeight="600"
+                          >
+                            Random BIC ({randomBIC.toFixed(1)})
+                          </text>
+                        </g>
+                      )}
+
                       {/* Line for each model */}
                       {activeModelList.map((m) => {
                         const pathD = m.bicHistory
@@ -917,6 +1007,13 @@ export default function App() {
                           <strong className="text-[#1f2328]">{m.finalBIC.toFixed(1)}</strong>
                         </div>
                       ))}
+                      {randomBIC !== null && (
+                        <div className="flex items-center gap-1.5 text-[#59636e]">
+                          <span className="w-3 h-0.5 border-t border-[#8c959f] border-dashed" />
+                          <span>Random:</span>
+                          <strong>{randomBIC.toFixed(1)}</strong>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -944,6 +1041,12 @@ export default function App() {
                             <th className="py-2.5 px-3 font-semibold">Evidence</th>
                             <th className="py-2.5 px-3 font-semibold">BIC</th>
                             <th className="py-2.5 px-3 font-semibold">ΔBIC</th>
+                            {randomLL !== null && randomBIC !== null && (
+                              <>
+                                <th className="py-2.5 px-3 font-semibold text-[#1a7f37]">ΔLL (vs Random)</th>
+                                <th className="py-2.5 px-3 font-semibold text-[#1a7f37]">ΔBIC (vs Random)</th>
+                              </>
+                            )}
                             <th className="py-2.5 px-3 font-semibold">Best-Explained %</th>
                           </tr>
                         </thead>
@@ -951,6 +1054,9 @@ export default function App() {
                           {sortedModels.map((m, idx) => {
                             const deltaBic = m.finalBIC - bestBicVal;
                             const isWinner = idx === 0;
+                            const dLLvsRand = randomLL !== null ? m.finalEvidence - randomLL : null;
+                            const dBICvsRand = randomBIC !== null ? m.finalBIC - randomBIC : null;
+
                             return (
                               <tr
                                 key={m.name}
@@ -982,12 +1088,49 @@ export default function App() {
                                     <span className="text-[#cf222e]">+{deltaBic.toFixed(1)}</span>
                                   )}
                                 </td>
+                                {dLLvsRand !== null && dBICvsRand !== null && (
+                                  <>
+                                    <td className={`py-2.5 px-3 font-semibold ${dLLvsRand > 0 ? 'text-[#1a7f37]' : 'text-[#cf222e]'}`}>
+                                      {dLLvsRand > 0 ? `+${dLLvsRand.toFixed(1)}` : dLLvsRand.toFixed(1)}
+                                    </td>
+                                    <td className={`py-2.5 px-3 font-semibold ${dBICvsRand < 0 ? 'text-[#1a7f37]' : 'text-[#cf222e]'}`}>
+                                      {dBICvsRand > 0 ? `+${dBICvsRand.toFixed(1)}` : dBICvsRand.toFixed(1)}
+                                    </td>
+                                  </>
+                                )}
                                 <td className="py-2.5 px-3 font-bold text-[#8250df]">
                                   {m.bestExplainedPct.toFixed(1)}% <span className="font-normal text-[10px] text-[#59636e]">({m.bestExplainedCount}/10)</span>
                                 </td>
                               </tr>
                             );
                           })}
+
+                          {/* Random Baseline Benchmark Row */}
+                          {randomLL !== null && randomBIC !== null && (
+                            <tr className="bg-[#f6f8fa] text-[#59636e] border-t-2 border-[#d1d9e0]">
+                              <td className="py-2.5 px-3">
+                                <span className="px-1.5 py-0.5 rounded bg-[#8c959f] text-white text-[10px] font-bold">
+                                  Benchmark
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 font-bold text-[#59636e] flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-[#8c959f]" />
+                                <span>Random Baseline</span>
+                              </td>
+                              <td className="py-2.5 px-3 text-[#59636e] font-sans text-xs">
+                                Chance benchmark (user-input LL, k=0 free parameters)
+                              </td>
+                              <td className="py-2.5 px-3 text-[#59636e]">0</td>
+                              <td className="py-2.5 px-3 text-[#59636e]">{randomLL.toFixed(1)}</td>
+                              <td className="py-2.5 px-3 text-[#59636e] font-bold">{randomBIC.toFixed(1)}</td>
+                              <td className="py-2.5 px-3 text-[#cf222e]">
+                                +{(randomBIC - bestBicVal).toFixed(1)}
+                              </td>
+                              <td className="py-2.5 px-3 text-[#59636e]">0.0 (Base)</td>
+                              <td className="py-2.5 px-3 text-[#59636e]">0.0 (Base)</td>
+                              <td className="py-2.5 px-3 text-[#8c959f]">0.0%</td>
+                            </tr>
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -1549,13 +1692,25 @@ export default function App() {
                 <div className="bg-[#f6f8fa] border border-[#d1d9e0] px-4 py-2 rounded-lg text-center">
                   <div className="text-[11px] uppercase tracking-wider font-semibold text-[#59636e]">Evidence</div>
                   <div className="text-lg font-bold text-[#0969da]">-141.30</div>
+                  {randomLL !== null && (
+                    <div className="text-[10px] text-[#1a7f37] font-bold">
+                      +{ (-141.30 - randomLL).toFixed(1) } vs Rand
+                    </div>
+                  )}
                 </div>
                 <div className="bg-[#f6f8fa] border border-[#d1d9e0] px-4 py-2 rounded-lg text-center">
                   <div className="text-[11px] uppercase tracking-wider font-semibold text-[#59636e]">BIC</div>
                   <div className="text-lg font-bold text-[#1a7f37]">291.90</div>
+                  {randomBIC !== null && (
+                    <div className="text-[10px] text-[#1a7f37] font-bold">
+                      { (291.90 - randomBIC).toFixed(1) } vs Rand
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
+
+
 
             {/* Sub-tab navigation bar for Single Model Report */}
             <div className="bg-white border border-[#d1d9e0] rounded-xl p-3 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1628,6 +1783,8 @@ export default function App() {
                   </span>
                 </div>
 
+
+
                 {/* Total Model Evidence & Subject Spaghetti Curves */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-white border border-[#d1d9e0] rounded-xl p-5 shadow-2xs space-y-3">
@@ -1651,6 +1808,33 @@ export default function App() {
                           </g>
                         );
                       })}
+
+                      {/* Random LL Benchmark Reference Line */}
+                      {randomLL !== null && (
+                        <g>
+                          <line
+                            x1={fitPad.left}
+                            y1={getEvY(randomLL)}
+                            x2={fitW - fitPad.right}
+                            y2={getEvY(randomLL)}
+                            stroke="#8c959f"
+                            strokeWidth="1.8"
+                            strokeDasharray="4 3"
+                          />
+                          <text
+                            x={fitW - fitPad.right}
+                            y={getEvY(randomLL) - 4}
+                            textAnchor="end"
+                            fontSize="10"
+                            fill="#59636e"
+                            fontFamily="monospace"
+                            fontWeight="600"
+                          >
+                            Random LL ({randomLL.toFixed(1)})
+                          </text>
+                        </g>
+                      )}
+
                       <path d={evidenceD} fill="none" stroke="#0969da" strokeWidth="2.5" />
                       {mockEvidence.map((ev, idx) => (
                         <circle key={idx} cx={getFitX(idx)} cy={getEvY(ev)} r="3" fill="#0969da" stroke="#fff" strokeWidth="1" />
@@ -1709,12 +1893,28 @@ export default function App() {
                   <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
                     <div className="text-[10px] uppercase font-bold text-[#59636e]">Total Evidence</div>
                     <div className="text-xl font-bold font-mono text-[#0969da]">-141.30</div>
-                    <div className="text-[11px] text-[#59636e]">Log-marginal likelihood</div>
+                    <div className="text-[11px] text-[#59636e]">
+                      {randomLL !== null ? (
+                        <span className="text-[#1a7f37] font-semibold">
+                          +{ (-141.30 - randomLL).toFixed(2) } vs Random
+                        </span>
+                      ) : (
+                        'Log-marginal likelihood'
+                      )}
+                    </div>
                   </div>
                   <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
                     <div className="text-[10px] uppercase font-bold text-[#59636e]">Final BIC</div>
                     <div className="text-xl font-bold font-mono text-[#1a7f37]">291.90</div>
-                    <div className="text-[11px] text-[#59636e]">Penalized criteria</div>
+                    <div className="text-[11px] text-[#59636e]">
+                      {randomBIC !== null ? (
+                        <span className="text-[#1a7f37] font-semibold">
+                          { (291.90 - randomBIC).toFixed(2) } vs Random
+                        </span>
+                      ) : (
+                        'Penalized criteria'
+                      )}
+                    </div>
                   </div>
                   <div className="p-4 bg-white border border-[#d1d9e0] rounded-xl shadow-2xs space-y-1">
                     <div className="text-[10px] uppercase font-bold text-[#59636e]">Iterations</div>
@@ -2419,10 +2619,66 @@ sampler.iterative_model_fit(n_iterations=15)`}
 
               <div>
                 <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
+                  Comparing to Random Baseline (<code>random_ll</code>)
+                </h2>
+                <p className="mb-2">
+                  Pass the chance baseline log-likelihood directly as an argument to <code>sampler.create_report(random_ll=...)</code> or <code>compare_models(random_ll=...)</code>. Because experimental choice structures vary across paradigms (binary, multi-alternative, or continuous), <code>random_ll</code> is supplied by the user as a function argument rather than assumed binary:
+                </p>
+                <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs overflow-x-auto">
+{`# 1. Compare in a single model report:
+# Random baseline has k=0 free parameters, so Random BIC = -2 * random_ll
+sampler.create_report(
+    filename="report_with_random.html",
+    random_ll=-250.0  # Pass chance log-likelihood as function argument
+)
+
+# 2. Compare across multiple models:
+compare_models(
+    [sampler_standard, sampler_dual_lr, sampler_perseveration],
+    filename="comparison_with_random.html",
+    random_ll=-250.0  # Appears in ranking table, delta columns, and benchmark lines
+)`}
+                </pre>
+                <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li><strong>Zero Free Parameters (k=0)</strong>: Random baseline BIC has no complexity penalty: <code>BIC = -2 &times; LL</code>.</li>
+                  <li><strong>Benchmark Trajectories</strong>: Dashed reference lines plotted on both evidence and BIC evolution curves.</li>
+                  <li><strong>Difference Metrics</strong>: Explicitly displays <code>&Delta;LL = LL<sub>model</sub> - LL<sub>random</sub></code> and <code>&Delta;BIC = BIC<sub>model</sub> - BIC<sub>random</sub></code> across report cards and ranking tables.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
+                  Multi-Core Parallel Execution (<code>n_jobs</code>)
+                </h2>
+                <p className="mb-2">
+                  Accelerate Iterative Importance Sampling across subjects by utilizing multiple CPU cores:
+                </p>
+                <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs overflow-x-auto">
+{`# Use all available CPU cores:
+sampler = Sampler(
+    data=data,
+    model=q_learning_model,
+    hyper_params=hyper_priors,
+    n_jobs=-1  # -1 uses all CPU cores, or specify n_jobs=4, 8, etc.
+)
+sampler.iterative_model_fit(n_iterations=15)
+
+# Or override directly in iterative_model_fit:
+sampler.iterative_model_fit(n_iterations=15, n_jobs=-1)`}
+                </pre>
+                <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li><strong>Monotonic Progress Tracking</strong>: Progress bar tracks strictly finished subject count and percentage, eliminating jumping back and forth across cores.</li>
+                  <li><strong>Independent Seeded RNGs</strong>: Each subject worker receives an independent RNG stream for exact reproducibility.</li>
+                  <li><strong>Clean Progress Format</strong>: Displays completion percentage, finished subjects, and elapsed/remaining durations in brackets without redundant "took" text.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
                   Single Model Report (<code>sampler.create_report</code>)
                 </h2>
                 <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs">
-                  sampler.create_report(filename="single_model_report.html")
+                  sampler.create_report(filename="single_model_report.html", random_ll=-250.0)
                 </pre>
               </div>
             </article>
