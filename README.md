@@ -366,14 +366,40 @@ sampler.deep_simulate(
 
 Enables deep simulations by passing subject-specific functions down to individual subject models. When invoking each subject's model instance, delegates `functions[i]` as an additional argument `f` to subject $i$'s model call alongside the subject's data and parameters.
 
+#### Model Invocation `mode`: `"deep_simulate"` vs `"simulate"`
+
+There is a distinct difference in the `mode` argument passed down to your model function:
+- **`sampler.simulate(...)`** invokes your model with **`mode="simulate"`**.
+- **`sampler.deep_simulate(...)`** invokes your model with **`mode="deep_simulate"`** and supplies the subject's function as **`f`**.
+
+This allows your model to easily branch logic between regular simulation and deep simulation:
+
+```python
+def my_model(subj_data, parameters, mode="log_likelihood", f=None):
+    if mode == "deep_simulate":
+        # Deep simulation: use the subject-specific function f
+        sim_data = f(subj_data, parameters)
+        return sim_data
+
+    elif mode == "simulate":
+        # Standard simulation
+        return standard_simulated_choices
+
+    elif mode == "log_likelihood":
+        # Fitting / evaluation mode
+        return log_likelihood
+```
+
 #### Core Capabilities
 1. **Single Callable or List Support**:
    - **Single Callable**: If `functions` is a single callable, it is automatically broadcast to every subject in the dataset.
    - **List of Callables**: If `functions` is a list, `len(functions)` must match the number of subjects in the dataset ($N_{subjects}$), and each `functions[i]` is mapped to `f` for subject $i$.
-2. **Strict Validation**:
+2. **Distinct Model Mode**:
+   - Invokes models with `mode="deep_simulate"` (with automatic backward compatibility if a model only checks `mode == "simulate"`).
+3. **Strict Validation**:
    - Raises an informative `ValueError` if a list length does not match $N_{subjects}$.
    - Raises an informative `TypeError` if `functions` is neither callable nor a sequence of callables.
-3. **Identical Output Structure**:
+4. **Identical Output Structure**:
    - Accepts all arguments supported by `simulate()` (`resample`, `n_simulations`, `to_df`, `combine_all`, `save_to_folder`).
    - Returns a `SimulatedDataList` (or reconstructed `DataFrame` if `to_df=True`) in the exact same format and structure as `simulate()`.
 

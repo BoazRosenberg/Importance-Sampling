@@ -21,12 +21,12 @@ class TestDeepSimulate(unittest.TestCase):
         }
 
     def test_single_function_delegates_to_all_subjects(self):
-        """Verify passing a single callable delegates f to all subject model calls."""
+        """Verify passing a single callable delegates f to all subject model calls with mode='deep_simulate'."""
         recorded_calls = []
 
         def mock_model(subj_data, params, mode="log_likelihood", f=None):
-            if mode == "simulate":
-                recorded_calls.append({"data": subj_data, "params": params, "f": f})
+            if mode == "deep_simulate":
+                recorded_calls.append({"data": subj_data, "params": params, "f": f, "mode": mode})
                 # Execute the passed function to generate simulated results
                 sim_output = f(subj_data, params)
                 return sim_output
@@ -242,6 +242,49 @@ class TestDeepSimulate(unittest.TestCase):
         res3 = s3.deep_simulate(test_fn)
         self.assertEqual(res3[0], 99)
 
+    def test_mode_deep_simulate_vs_simulate(self):
+        """Verify model receives mode='deep_simulate' in deep_simulate and mode='simulate' in simulate."""
+        received_modes = []
+
+        def branching_model(data, params, mode="log_likelihood", f=None):
+            received_modes.append(mode)
+            if mode == "deep_simulate":
+                return {"mode_received": mode, "f_eval": f(data) if f else None}
+            elif mode == "simulate":
+                return {"mode_received": mode}
+            return np.array([0.0])
+
+        sampler = Sampler(self.data, branching_model, self.hyper_params, random_state=42)
+
+        # 1. deep_simulate call
+        deep_res = sampler.deep_simulate(functions=lambda d: "deep_metric")
+        self.assertTrue(all(m == "deep_simulate" for m in received_modes[:self.n_subjects]))
+        for subj_out in deep_res:
+            self.assertEqual(subj_out["mode_received"], "deep_simulate")
+            self.assertEqual(subj_out["f_eval"], "deep_metric")
+
+        # 2. simulate call
+        received_modes.clear()
+        sim_res = sampler.simulate()
+        self.assertTrue(all(m == "simulate" for m in received_modes[:self.n_subjects]))
+        for subj_out in sim_res:
+            self.assertEqual(subj_out["mode_received"], "simulate")
+
+    def test_fallback_to_simulate_mode_for_legacy_model(self):
+        """Verify models that only inspect mode == 'simulate' still work seamlessly via fallback."""
+        def legacy_model(data, params, mode="log_likelihood", f=None):
+            # Model only knows about "simulate", not "deep_simulate"
+            if mode == "simulate":
+                return {"legacy_result": True, "f_val": f(data) if f else None}
+            return None
+
+        sampler = Sampler(self.data, legacy_model, self.hyper_params, random_state=42)
+        res = sampler.deep_simulate(functions=lambda d: "legacy_f")
+        for subj_out in res:
+            self.assertTrue(subj_out["legacy_result"])
+            self.assertEqual(subj_out["f_val"], "legacy_f")
+
 
 if __name__ == "__main__":
     unittest.main()
+

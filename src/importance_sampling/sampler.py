@@ -919,9 +919,9 @@ class Sampler:
             model(subj_data, parameters, mode="log_likelihood")
         and legacy 4-argument signature:
             model(subj_data, parameters, transformations, mode="log_likelihood")
-        In deep_simulate mode, passes `f` as an additional argument `f` to the model call:
-            model(subj_data, parameters, mode="simulate", f=f)
-        Also supports either mode="log_likelihood" or mode="loglikelihood".
+        In deep_simulate mode, passes mode="deep_simulate" and `f` as an additional argument `f` to the model call:
+            model(subj_data, parameters, mode="deep_simulate", f=f)
+        Also supports either mode="log_likelihood" or mode="loglikelihood", and fallback to mode="simulate" if a model only handles "simulate".
         """
         def _call_fn(m_arg: str):
             try:
@@ -1008,6 +1008,9 @@ class Sampler:
                 res = _call_fn("loglikelihood")
             elif mode == "loglikelihood":
                 res = _call_fn("log_likelihood")
+            elif mode == "deep_simulate":
+                # Fallback to "simulate" if user's model only implemented mode == "simulate"
+                res = _call_fn("simulate")
         return res
 
     def sample_resample(
@@ -1577,15 +1580,17 @@ class Sampler:
                     raw_p = {k: np.array([self.hyper_params[k]["mean"]]) for k in self.params}
                 transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
 
-            # Invoke model in simulate mode, passing f=subj_f if deep simulation
+            # Invoke model in 'deep_simulate' mode if fn_list is provided, or 'simulate' mode otherwise
             invoke_kwargs = dict(kwargs)
             if subj_f is not None:
                 invoke_kwargs["f"] = subj_f
 
+            model_mode = "deep_simulate" if fn_list is not None else "simulate"
+
             sim_res = self._invoke_model(
                 subj_data,
                 transformed_p,
-                mode="simulate",
+                mode=model_mode,
                 raw_samples=raw_p,
                 **invoke_kwargs,
             )
@@ -1730,8 +1735,11 @@ class Sampler:
     ) -> Union[SimulatedDataList, Any]:
         """Deep simulate data for subjects, passing subject-specific functions down to individual models.
 
-        When invoking each subject's model instance, passes `functions[i]` as an additional argument `f`
-        to subject i's model call (alongside the subject's data and parameters).
+        Model Invocation Mode:
+        - When calling subject models during `deep_simulate`, the model is invoked with `mode="deep_simulate"`
+          (in contrast to standard `simulate` which invokes the model with `mode="simulate"`).
+        - Passes `functions[i]` as an additional argument `f` to subject i's model call:
+            `model(subj_data, parameters, mode="deep_simulate", f=f)`
 
         File Naming Conventions:
         - Single file: 'deep_simulate_{model_name}.csv' (or custom file_name).

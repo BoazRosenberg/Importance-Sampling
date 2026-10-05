@@ -85,7 +85,8 @@ def q_learning_model(subj_data, parameters, mode="log_likelihood", f=None):
       - parameters["inv_temp"]: 1D array of shape (n_samples,), strictly positive > 0
 
     Returns:
-      - p_choices (choice probabilities) if mode == "simulate"
+      - choice probabilities if mode == "simulate"
+      - deep simulated structure with function evaluation if mode == "deep_simulate"
       - log_likelihood (total log evidence per sample) if mode == "log_likelihood"
     """
     alpha = parameters["lr"]        # Shape: (n_samples,)
@@ -120,8 +121,8 @@ def q_learning_model(subj_data, parameters, mode="log_likelihood", f=None):
         Q1 += alpha * (reward1[i] - Q1)
         Q2 += alpha * (reward2[i] - Q2)
 
-    if mode == "simulate":
-        # Average choice probabilities across parameter draws
+    if mode == "deep_simulate":
+        # Deep simulation: evaluate subject-specific function f
         p_arr = np.array(p_choices)
         mean_p = np.mean(p_arr, axis=1) if p_arr.ndim > 1 else p_arr
         res = dict(subj_data)
@@ -129,6 +130,15 @@ def q_learning_model(subj_data, parameters, mode="log_likelihood", f=None):
         if f is not None:
             res["deep_eval"] = f(res)
         return res
+
+    if mode == "simulate":
+        # Standard simulation
+        p_arr = np.array(p_choices)
+        mean_p = np.mean(p_arr, axis=1) if p_arr.ndim > 1 else p_arr
+        res = dict(subj_data)
+        res["mean_choice_probability"] = mean_p
+        return res
+
     return log_likelihood
 
 

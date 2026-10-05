@@ -2678,10 +2678,20 @@ sampler.iterative_model_fit(n_iterations=15, n_jobs=-1)`}
                   Deep Simulation (<code>sampler.deep_simulate</code>)
                 </h2>
                 <p className="mb-2">
-                  Enable deep simulations by passing subject-specific functions down to individual subject models. Each subject model receives <code>f</code> as an argument during simulation:
+                  Enable deep simulations by passing subject-specific functions down to individual subject models. In deep simulation, each subject model is invoked with <strong><code>mode="deep_simulate"</code></strong> (unlike standard simulation which uses <code>mode="simulate"</code>) and receives <code>f</code> as an argument:
                 </p>
                 <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs overflow-x-auto">
-{`# 1. Single function passed to all subjects:
+{`# Model definition branching on mode:
+def my_model(subj_data, parameters, mode="log_likelihood", f=None):
+    if mode == "deep_simulate":
+        # Deep simulation: evaluate subject-specific function f
+        return f(subj_data, parameters)
+    elif mode == "simulate":
+        # Standard simulation
+        return simulated_choices
+    return log_likelihood
+
+# 1. Single function passed to all subjects:
 sim_dat = sampler.deep_simulate(functions=policy_evaluation_fn)
 
 # 2. Subject-specific functions list (must match number of subjects):
@@ -2692,6 +2702,7 @@ sim_dat = sampler.deep_simulate(functions=subject_fns)
 df = sampler.deep_simulate(functions=subject_fns, to_df=True)`}
                 </pre>
                 <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li><strong>Dedicated Model Mode</strong>: Invokes models with <code>mode="deep_simulate"</code>, allowing distinct branching from standard <code>mode="simulate"</code>.</li>
                   <li><strong>Single Callable or List Support</strong>: Broadcasts a single callable across all subjects, or maps <code>functions[i] &rarr; f</code> for each subject.</li>
                   <li><strong>Strict Validation</strong>: Validates list length against <code>n_subjects</code> and checks callability, raising informative <code>ValueError</code> or <code>TypeError</code>.</li>
                   <li><strong>Identical Return Structure</strong>: Returns a <code>SimulatedDataList</code> or reconstructed <code>DataFrame</code> supporting all standard simulation arguments (<code>resample</code>, <code>n_simulations</code>, <code>to_df</code>).</li>
