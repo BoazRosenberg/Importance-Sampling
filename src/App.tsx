@@ -2702,6 +2702,7 @@ sim_dat = sampler.deep_simulate(functions=subject_fns)
 df = sampler.deep_simulate(functions=subject_fns, to_df=True)`}
                 </pre>
                 <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li><strong>Subject Progress Bar</strong>: Both <code>simulate</code> and <code>deep_simulate</code> include real-time progress bars tracking subject completion (enabled by default via <code>progress_bar=True</code>).</li>
                   <li><strong>Dedicated Model Mode</strong>: Invokes models with <code>mode="deep_simulate"</code>, allowing distinct branching from standard <code>mode="simulate"</code>.</li>
                   <li><strong>Single Callable or List Support</strong>: Broadcasts a single callable across all subjects, or maps <code>functions[i] &rarr; f</code> for each subject.</li>
                   <li><strong>Strict Validation</strong>: Validates list length against <code>n_subjects</code> and checks callability, raising informative <code>ValueError</code> or <code>TypeError</code>.</li>

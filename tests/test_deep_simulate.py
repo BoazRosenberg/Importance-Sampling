@@ -284,7 +284,52 @@ class TestDeepSimulate(unittest.TestCase):
             self.assertTrue(subj_out["legacy_result"])
             self.assertEqual(subj_out["f_val"], "legacy_f")
 
+    def test_progress_bar_in_simulate_and_deep_simulate(self):
+        """Verify progress bar tracking subject completion in both simulate and deep_simulate."""
+        from unittest.mock import patch, MagicMock
+
+        def dummy_model(data, params, mode="simulate", f=None):
+            return {"trial": [1, 2]}
+
+        sampler = Sampler(self.data, dummy_model, self.hyper_params, random_state=42)
+
+        # 1. Simulate with progress bar
+        with patch("importance_sampling.sampler.tqdm") as mock_tqdm:
+            mock_pbar = MagicMock()
+            mock_tqdm.return_value = mock_pbar
+
+            sampler.simulate(progress_bar=True)
+            mock_tqdm.assert_called_once()
+            _, kwargs = mock_tqdm.call_args
+            self.assertEqual(kwargs["total"], self.n_subjects)
+            self.assertEqual(kwargs["desc"], "Simulate")
+            self.assertEqual(mock_pbar.update.call_count, self.n_subjects)
+            mock_pbar.close.assert_called_once()
+
+        # 2. Deep simulate with progress bar
+        with patch("importance_sampling.sampler.tqdm") as mock_tqdm:
+            mock_pbar = MagicMock()
+            mock_tqdm.return_value = mock_pbar
+
+            sampler.deep_simulate(functions=lambda d: None, progress_bar=True)
+            mock_tqdm.assert_called_once()
+            _, kwargs = mock_tqdm.call_args
+            self.assertEqual(kwargs["total"], self.n_subjects)
+            self.assertEqual(kwargs["desc"], "Deep Simulate")
+            self.assertEqual(mock_pbar.update.call_count, self.n_subjects)
+            mock_pbar.close.assert_called_once()
+
+        # 3. Disabling progress bar
+        with patch("importance_sampling.sampler.tqdm") as mock_tqdm:
+            sampler.simulate(progress_bar=False)
+            mock_tqdm.assert_not_called()
+
+        with patch("importance_sampling.sampler.tqdm") as mock_tqdm:
+            sampler.deep_simulate(functions=lambda d: None, progress_bar=False)
+            mock_tqdm.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

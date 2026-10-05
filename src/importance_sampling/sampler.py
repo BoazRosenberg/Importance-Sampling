@@ -394,7 +394,10 @@ def _save_reconstructed_dataframes(
 
         abs_p = os.path.abspath(out_path)
         saved_paths[k] = abs_p
-        print(f"Saved simulated data for '{k}' ({len(df)} rows) to: {abs_p}")
+        if k == "_single_":
+            print(f"Saved simulated data ({len(df)} rows) to: {abs_p}")
+        else:
+            print(f"Saved simulated data for '{k}' ({len(df)} rows) to: {abs_p}")
 
     return saved_paths
 
@@ -1521,6 +1524,7 @@ class Sampler:
         n_simulations: Optional[int] = None,
         file_name: Optional[str] = None,
         by_subject: bool = False,
+        progress_bar: bool = True,
         **kwargs: Any,
     ) -> Union[SimulatedDataList, Any]:
         """Internal simulation dispatcher supporting both standard and deep simulation."""
@@ -1551,53 +1555,79 @@ class Sampler:
         if sub_index is None:
             sub_index = kwargs.pop("save_kinds", kwargs.pop("kinds", kwargs.pop("sub_indices", None)))
 
+        # Progress bar settings
+        show_progress = progress_bar and not kwargs.pop("disable_progress", False)
+        if "verbose" in kwargs:
+            show_progress = show_progress and bool(kwargs.pop("verbose"))
+        if "progress" in kwargs:
+            show_progress = show_progress and bool(kwargs.pop("progress"))
+
         sim_data = []
         target_subjects = self.subjects if subjects == "all" else list(subjects)
         target_folder = save_to_folder or save_dir
 
-        for s in target_subjects:
-            subj_data = self.data[s]
-            subj_f = fn_list[s] if fn_list is not None else None
-
-            if mode == "resample" and self.samples is not None:
-                raw_p = {k: self.samples[k][s] for k in self.params}
-                transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
-            elif mode == "hyper_params":
-                raw_p = {
-                    k: self.rng.normal(
-                        self.hyper_params[k]["mean"], self.hyper_params[k]["sd"], size=n_samples
-                    )
-                    for k in self.params
-                }
-                transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
-            elif mode == "override_params" and override_params is not None:
-                raw_p = override_params
-                transformed_p = override_params
-            else:
-                if self.mean_params is not None and s < len(next(iter(self.mean_params.values()), [])):
-                    raw_p = {k: np.array([self.mean_params[k][s]]) for k in self.params}
-                else:
-                    raw_p = {k: np.array([self.hyper_params[k]["mean"]]) for k in self.params}
-                transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
-
-            # Invoke model in 'deep_simulate' mode if fn_list is provided, or 'simulate' mode otherwise
-            invoke_kwargs = dict(kwargs)
-            if subj_f is not None:
-                invoke_kwargs["f"] = subj_f
-
-            model_mode = "deep_simulate" if fn_list is not None else "simulate"
-
-            sim_res = self._invoke_model(
-                subj_data,
-                transformed_p,
-                mode=model_mode,
-                raw_samples=raw_p,
-                **invoke_kwargs,
+        desc = "Deep Simulate" if fn_list is not None else "Simulate"
+        pbar = None
+        if show_progress and len(target_subjects) > 0:
+            pbar = tqdm(
+                total=len(target_subjects),
+                desc=desc,
+                unit="subj",
+                leave=True,
+                file=sys.stdout,
+                dynamic_ncols=True,
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} subjects finished [{elapsed}<{remaining}]",
             )
-            if sim_res is None:
-                sim_res = subj_data
 
-            sim_data.append(sim_res)
+        try:
+            for s in target_subjects:
+                subj_data = self.data[s]
+                subj_f = fn_list[s] if fn_list is not None else None
+
+                if mode == "resample" and self.samples is not None:
+                    raw_p = {k: self.samples[k][s] for k in self.params}
+                    transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
+                elif mode == "hyper_params":
+                    raw_p = {
+                        k: self.rng.normal(
+                            self.hyper_params[k]["mean"], self.hyper_params[k]["sd"], size=n_samples
+                        )
+                        for k in self.params
+                    }
+                    transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
+                elif mode == "override_params" and override_params is not None:
+                    raw_p = override_params
+                    transformed_p = override_params
+                else:
+                    if self.mean_params is not None and s < len(next(iter(self.mean_params.values()), [])):
+                        raw_p = {k: np.array([self.mean_params[k][s]]) for k in self.params}
+                    else:
+                        raw_p = {k: np.array([self.hyper_params[k]["mean"]]) for k in self.params}
+                    transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
+
+                # Invoke model in 'deep_simulate' mode if fn_list is provided, or 'simulate' mode otherwise
+                invoke_kwargs = dict(kwargs)
+                if subj_f is not None:
+                    invoke_kwargs["f"] = subj_f
+
+                model_mode = "deep_simulate" if fn_list is not None else "simulate"
+
+                sim_res = self._invoke_model(
+                    subj_data,
+                    transformed_p,
+                    mode=model_mode,
+                    raw_samples=raw_p,
+                    **invoke_kwargs,
+                )
+                if sim_res is None:
+                    sim_res = subj_data
+
+                sim_data.append(sim_res)
+                if pbar is not None:
+                    pbar.update(1)
+        finally:
+            if pbar is not None:
+                pbar.close()
 
         result = SimulatedDataList(sim_data, sampler=self, simulation_type=sim_type)
 
@@ -1640,6 +1670,7 @@ class Sampler:
         n_simulations: Optional[int] = None,
         file_name: Optional[str] = None,
         by_subject: bool = False,
+        progress_bar: bool = True,
         **kwargs: Any,
     ) -> Union[SimulatedDataList, Any]:
         """Simulate data for subjects using fitted parameters.
@@ -1688,6 +1719,8 @@ class Sampler:
             Custom file name for saved data.
         by_subject : bool, default=False
             If True, saves separate files per subject.
+        progress_bar : bool, default=True
+            Whether to display a tqdm progress bar tracking subject completion.
         **kwargs : Any
             Additional arguments forwarded to simulation and model calls.
 
@@ -1712,6 +1745,7 @@ class Sampler:
             n_simulations=n_simulations,
             file_name=file_name,
             by_subject=by_subject,
+            progress_bar=progress_bar,
             **kwargs,
         )
 
@@ -1731,6 +1765,7 @@ class Sampler:
         n_simulations: Optional[int] = None,
         file_name: Optional[str] = None,
         by_subject: bool = False,
+        progress_bar: bool = True,
         **kwargs: Any,
     ) -> Union[SimulatedDataList, Any]:
         """Deep simulate data for subjects, passing subject-specific functions down to individual models.
@@ -1780,6 +1815,8 @@ class Sampler:
             Custom file name for saved data.
         by_subject : bool, default=False
             If True, saves separate files per subject.
+        progress_bar : bool, default=True
+            Whether to display a tqdm progress bar tracking subject completion.
         **kwargs : Any
             Additional keyword arguments (e.g. `n_simulations`, `resample`) passed to simulation and the model.
 
@@ -1826,6 +1863,7 @@ class Sampler:
             n_simulations=n_simulations,
             file_name=file_name,
             by_subject=by_subject,
+            progress_bar=progress_bar,
             **kwargs,
         )
 

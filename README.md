@@ -276,10 +276,15 @@ sim_dat = sampler.simulate(
     sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
     combine_all: bool = False,
     save_to_folder: Optional[str] = None,
+    resample: Optional[Union[bool, str]] = None,
+    n_simulations: Optional[int] = None,
+    file_name: Optional[str] = None,
+    by_subject: bool = False,
+    progress_bar: bool = True,
 ) -> Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
 ```
 
-Runs the model in simulate mode using the fitted parameters.
+Runs the model in simulate mode using the fitted parameters. Tracks subject completion with a real-time progress bar (`progress_bar=True` by default).
 
 #### Basic Usage: Simple List of Subject Datas
 
@@ -360,6 +365,9 @@ sampler.deep_simulate(
     save_dir: Optional[str] = None,
     resample: Optional[Union[bool, str]] = None,
     n_simulations: Optional[int] = None,
+    file_name: Optional[str] = None,
+    by_subject: bool = False,
+    progress_bar: bool = True,
     **kwargs: Any,
 ) -> Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
 ```
@@ -391,15 +399,17 @@ def my_model(subj_data, parameters, mode="log_likelihood", f=None):
 ```
 
 #### Core Capabilities
-1. **Single Callable or List Support**:
+1. **Subject Progress Bar**:
+   - Both `simulate` and `deep_simulate` feature a real-time progress bar tracking subject completion (`progress_bar=True` by default, or set `progress_bar=False` to disable).
+2. **Single Callable or List Support**:
    - **Single Callable**: If `functions` is a single callable, it is automatically broadcast to every subject in the dataset.
    - **List of Callables**: If `functions` is a list, `len(functions)` must match the number of subjects in the dataset ($N_{subjects}$), and each `functions[i]` is mapped to `f` for subject $i$.
-2. **Distinct Model Mode**:
+3. **Distinct Model Mode**:
    - Invokes models with `mode="deep_simulate"` (with automatic backward compatibility if a model only checks `mode == "simulate"`).
-3. **Strict Validation**:
+4. **Strict Validation**:
    - Raises an informative `ValueError` if a list length does not match $N_{subjects}$.
    - Raises an informative `TypeError` if `functions` is neither callable nor a sequence of callables.
-4. **Identical Output Structure**:
+5. **Identical Output Structure**:
    - Accepts all arguments supported by `simulate()` (`resample`, `n_simulations`, `to_df`, `combine_all`, `save_to_folder`).
    - Returns a `SimulatedDataList` (or reconstructed `DataFrame` if `to_df=True`) in the exact same format and structure as `simulate()`.
 

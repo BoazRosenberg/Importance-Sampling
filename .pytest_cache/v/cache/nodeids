@@ -6,6 +6,7 @@
   "tests/test_deep_simulate.py::TestDeepSimulate::test_list_of_functions_delegates_each_to_subject",
   "tests/test_deep_simulate.py::TestDeepSimulate::test_mismatched_list_lengths_raise_value_error",
   "tests/test_deep_simulate.py::TestDeepSimulate::test_mode_deep_simulate_vs_simulate",
+  "tests/test_deep_simulate.py::TestDeepSimulate::test_progress_bar_in_simulate_and_deep_simulate",
   "tests/test_deep_simulate.py::TestDeepSimulate::test_single_function_delegates_to_all_subjects",
   "tests/test_file_naming.py::TestFileNamingConventions::test_custom_file_name_multiple_files_appends_index",
   "tests/test_file_naming.py::TestFileNamingConventions::test_custom_file_name_single_file",
