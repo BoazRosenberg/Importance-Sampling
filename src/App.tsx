@@ -2675,6 +2675,31 @@ sampler.iterative_model_fit(n_iterations=15, n_jobs=-1)`}
 
               <div>
                 <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
+                  Deep Simulation (<code>sampler.deep_simulate</code>)
+                </h2>
+                <p className="mb-2">
+                  Enable deep simulations by passing subject-specific functions down to individual subject models. Each subject model receives <code>f</code> as an argument during simulation:
+                </p>
+                <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs overflow-x-auto">
+{`# 1. Single function passed to all subjects:
+sim_dat = sampler.deep_simulate(functions=policy_evaluation_fn)
+
+# 2. Subject-specific functions list (must match number of subjects):
+subject_fns = [policy_fn_0, policy_fn_1, policy_fn_2]
+sim_dat = sampler.deep_simulate(functions=subject_fns)
+
+# 3. Direct export to combined DataFrame:
+df = sampler.deep_simulate(functions=subject_fns, to_df=True)`}
+                </pre>
+                <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li><strong>Single Callable or List Support</strong>: Broadcasts a single callable across all subjects, or maps <code>functions[i] &rarr; f</code> for each subject.</li>
+                  <li><strong>Strict Validation</strong>: Validates list length against <code>n_subjects</code> and checks callability, raising informative <code>ValueError</code> or <code>TypeError</code>.</li>
+                  <li><strong>Identical Return Structure</strong>: Returns a <code>SimulatedDataList</code> or reconstructed <code>DataFrame</code> supporting all standard simulation arguments (<code>resample</code>, <code>n_simulations</code>, <code>to_df</code>).</li>
+                </ul>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
                   Single Model Report (<code>sampler.create_report</code>)
                 </h2>
                 <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs">

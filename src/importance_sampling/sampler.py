@@ -14,6 +14,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+import pandas as pd
 from scipy.special import logsumexp
 from tqdm.auto import tqdm
 
@@ -249,47 +250,139 @@ def _reconstruct_dataframes(
 
 def _save_reconstructed_dataframes(
     sim_data: Sequence[Any],
-    folder: str,
+    folder: Optional[str] = None,
     sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
     combine_all: bool = False,
     sampler: Optional["Sampler"] = None,
     file_format: str = "csv",
-    prefix: str = "simulated_data",
+    file_name: Optional[str] = None,
+    simulation_type: Optional[str] = None,
+    by_subject: bool = False,
+    prefix: Optional[str] = None,
     **kwargs: Any,
 ) -> Dict[Union[int, str], str]:
-    """Save reconstructed DataFrame(s) to a folder."""
-    os.makedirs(folder, exist_ok=True)
+    """Save reconstructed DataFrame(s) to a folder following project naming conventions.
 
+    Naming Conventions:
+    - User Custom Name: If the user explicitly passes file_name="my_custom_name", use file_name
+      (appending the subject ID or sub-index if multiple files are saved: e.g. 'my_custom_name_0.csv').
+    - Default Single File / Dataset:
+        * For simulate: simulate_{model_name}.csv (e.g. simulate_m0.csv)
+        * For deep_simulate: deep_simulate_{model_name}.csv (e.g. deep_simulate_m0.csv)
+    - If creating several files:
+        * Use the sub index names and put them all in a folder called 'simulate' or 'deep_simulate'.
+    """
     if sub_index is None:
         sub_index = kwargs.get("kinds", kwargs.get("save_kinds", None))
 
-    reconstructed = _reconstruct_dataframes(
-        sim_data,
-        sampler=sampler,
-        sub_index=sub_index,
-        combine_all=combine_all,
-        **kwargs,
+    if file_name is None:
+        file_name = kwargs.get("filename", prefix if (prefix and prefix != "simulated_data") else None)
+
+    # Determine simulation type ('simulate' or 'deep_simulate')
+    sim_type = (
+        simulation_type
+        or getattr(sim_data, "simulation_type", None)
+        or kwargs.get("sim_type", None)
+        or "simulate"
     )
+    if "deep" in str(sim_type).lower():
+        sim_type = "deep_simulate"
+    else:
+        sim_type = "simulate"
+
+    # Determine model name
+    eff_sampler = sampler or getattr(sim_data, "sampler", None)
+    model_name = getattr(eff_sampler, "model_name", None) or "model"
 
     dfs_to_save: Dict[Union[int, str], Any] = {}
-    if hasattr(reconstructed, "to_csv"):
-        key = sub_index if (sub_index is not None and not isinstance(sub_index, (list, tuple, set))) else prefix
-        dfs_to_save[key] = reconstructed
-    elif isinstance(reconstructed, dict):
-        dfs_to_save = reconstructed
+
+    if by_subject:
+        # Save each subject's simulated data as a separate file
+        for s_idx, subj_item in enumerate(sim_data):
+            s_id = s_idx
+            if eff_sampler and hasattr(eff_sampler, "data") and s_idx < len(eff_sampler.data):
+                s_data = eff_sampler.data[s_idx]
+                if isinstance(s_data, pd.DataFrame):
+                    for col_name in ["subject_id", "subject", "sub", "id"]:
+                        if col_name in s_data.columns:
+                            s_id = s_data[col_name].iloc[0]
+                            break
+
+            if isinstance(subj_item, pd.DataFrame):
+                df = subj_item.copy()
+            elif isinstance(subj_item, dict):
+                if any(isinstance(v, pd.DataFrame) for v in subj_item.values()):
+                    target_k = sub_index if sub_index in subj_item else next(iter(subj_item))
+                    df = subj_item[target_k].copy()
+                else:
+                    df = pd.DataFrame(subj_item)
+            elif hasattr(subj_item, "to_dataframe"):
+                df = subj_item.to_dataframe()
+            else:
+                df = pd.DataFrame(subj_item)
+
+            if "subject" not in df.columns and "subject_id" not in df.columns:
+                df.insert(0, "subject", s_id)
+            dfs_to_save[s_id] = df
     else:
-        dfs_to_save = {prefix: reconstructed}
+        reconstructed = _reconstruct_dataframes(
+            sim_data,
+            sampler=eff_sampler,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            **kwargs,
+        )
+
+        if hasattr(reconstructed, "to_csv"):
+            dfs_to_save["_single_"] = reconstructed
+        elif isinstance(reconstructed, dict):
+            if len(reconstructed) == 1 and sub_index is None:
+                dfs_to_save["_single_"] = next(iter(reconstructed.values()))
+            else:
+                dfs_to_save = reconstructed
+        else:
+            dfs_to_save["_single_"] = pd.DataFrame(reconstructed)
+
+    is_several_files = len(dfs_to_save) > 1
+
+    # Determine target folder
+    if folder:
+        target_folder = folder
+    elif is_several_files:
+        # Default for multiple files: put them all in a folder called simulate or deep_simulate
+        target_folder = sim_type
+    else:
+        target_folder = "."
+
+    os.makedirs(target_folder, exist_ok=True)
+
+    # Base custom name if user passed file_name
+    base_custom_name = None
+    if file_name is not None and str(file_name).strip():
+        fn_str = str(file_name).strip()
+        if fn_str.lower().endswith(f".{file_format.lower()}"):
+            fn_str = fn_str[: -(len(file_format) + 1)]
+        base_custom_name = fn_str
 
     saved_paths: Dict[Union[int, str], str] = {}
-    for sub_k, df in dfs_to_save.items():
-        if len(dfs_to_save) == 1 and sub_k == prefix:
-            fname = f"{prefix}.{file_format}"
-        elif isinstance(sub_k, int):
-            fname = f"{prefix}_sub_{sub_k}.{file_format}"
-        else:
-            fname = f"{sub_k}.{file_format}"
 
-        out_path = os.path.join(folder, fname)
+    for k, df in dfs_to_save.items():
+        if not is_several_files:
+            # Single file / dataset
+            if base_custom_name:
+                fname = f"{base_custom_name}.{file_format}"
+            else:
+                fname = f"{sim_type}_{model_name}.{file_format}"
+        else:
+            # Several files:
+            if base_custom_name:
+                # "use file_name (appending the subject ID/index if multiple files are saved)"
+                fname = f"{base_custom_name}_{k}.{file_format}"
+            else:
+                # "use the sub index names and put them all in a folder called simulate or deep_simulate"
+                fname = f"{k}.{file_format}"
+
+        out_path = os.path.join(target_folder, fname)
         if file_format == "csv":
             df.to_csv(out_path, index=False)
         elif file_format == "parquet":
@@ -300,8 +393,8 @@ def _save_reconstructed_dataframes(
             df.to_csv(out_path, index=False)
 
         abs_p = os.path.abspath(out_path)
-        saved_paths[sub_k] = abs_p
-        print(f"Saved simulated data for sub_index '{sub_k}' ({len(df)} rows) to: {abs_p}")
+        saved_paths[k] = abs_p
+        print(f"Saved simulated data for '{k}' ({len(df)} rows) to: {abs_p}")
 
     return saved_paths
 
@@ -313,9 +406,15 @@ class SimulatedDataList(list):
     list (e.g. `len(sim_dat)`, `sim_dat[0]`, `for s in sim_dat:`).
     """
 
-    def __init__(self, data_list: Sequence[Any], sampler: Optional["Sampler"] = None):
+    def __init__(
+        self,
+        data_list: Sequence[Any],
+        sampler: Optional["Sampler"] = None,
+        simulation_type: str = "simulate",
+    ):
         super().__init__(data_list)
         self.sampler = sampler
+        self.simulation_type = simulation_type
 
     def to_dataframe(
         self,
@@ -379,33 +478,43 @@ class SimulatedDataList(list):
 
     def save(
         self,
-        folder: str,
+        folder: Optional[str] = None,
         sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
         combine_all: bool = False,
         file_format: str = "csv",
-        prefix: str = "simulated_data",
+        file_name: Optional[str] = None,
+        simulation_type: Optional[str] = None,
+        by_subject: bool = False,
+        prefix: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[Union[int, str], str]:
-        """Save reconstructed DataFrame(s) to a folder.
+        """Save reconstructed DataFrame(s) to CSV, Parquet, or Feather files.
 
         Parameters
         ----------
-        folder : str
-            Destination directory (created if it does not exist).
+        folder : Optional[str], default=None
+            Destination directory. If None and creating several files, defaults to 'simulate' or 'deep_simulate'.
         sub_index : Optional[Union[int, str, Sequence[Union[int, str]]]], default=None
             Specific sub-index (e.g. 0 or 'phase1') to save. If None, saves all sub-DataFrames.
         combine_all : bool, default=False
             If True, constructs all sub-dfs together into 1 combined file.
         file_format : str, default='csv'
             File format ('csv', 'parquet', or 'feather').
-        prefix : str, default='simulated_data'
-            Prefix for output filenames.
+        file_name : Optional[str], default=None
+            Custom file name. If saving multiple files, subject ID or sub-index is appended.
+        simulation_type : Optional[str], default=None
+            'simulate' or 'deep_simulate'.
+        by_subject : bool, default=False
+            If True, saves each subject's simulated data to its own file.
 
         Returns
         -------
         Dict[Union[int, str], str]
-            Dictionary mapping saved sub-indices to their destination file paths.
+            Dictionary mapping saved sub-indices/subjects to their destination file paths.
         """
+        if file_name is None:
+            file_name = kwargs.pop("filename", None)
+        sim_type = simulation_type or getattr(self, "simulation_type", "simulate")
         return _save_reconstructed_dataframes(
             self,
             folder=folder,
@@ -413,6 +522,9 @@ class SimulatedDataList(list):
             combine_all=combine_all,
             sampler=self.sampler,
             file_format=file_format,
+            file_name=file_name,
+            simulation_type=sim_type,
+            by_subject=by_subject,
             prefix=prefix,
             **kwargs,
         )
@@ -798,6 +910,8 @@ class Sampler:
         transformed_params: Dict[str, np.ndarray],
         mode: str = "log_likelihood",
         raw_samples: Optional[Dict[str, np.ndarray]] = None,
+        f: Optional[Callable[..., Any]] = None,
+        **extra_kwargs: Any,
     ) -> Any:
         """Calls the model with pre-transformed parameters.
 
@@ -805,22 +919,88 @@ class Sampler:
             model(subj_data, parameters, mode="log_likelihood")
         and legacy 4-argument signature:
             model(subj_data, parameters, transformations, mode="log_likelihood")
+        In deep_simulate mode, passes `f` as an additional argument `f` to the model call:
+            model(subj_data, parameters, mode="simulate", f=f)
         Also supports either mode="log_likelihood" or mode="loglikelihood".
         """
         def _call_fn(m_arg: str):
             try:
                 sig = inspect.signature(self.model)
-                if len(sig.parameters) <= 3 or "transformations" not in sig.parameters:
-                    return self.model(subj_data, transformed_params, mode=m_arg)
+                has_transformations = (
+                    len(sig.parameters) > 3 and "transformations" in sig.parameters
+                )
+                has_var_keyword = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                )
+
+                if has_transformations:
+                    p = raw_samples if raw_samples is not None else transformed_params
+                    pos_args = (subj_data, p, self.transformations)
                 else:
-                    p = raw_samples if raw_samples is not None else transformed_params
-                    return self.model(subj_data, p, self.transformations, mode=m_arg)
+                    pos_args = (subj_data, transformed_params)
+
+                call_kwargs: Dict[str, Any] = {}
+                if "mode" in sig.parameters or has_var_keyword:
+                    call_kwargs["mode"] = m_arg
+                if f is not None:
+                    if "f" in sig.parameters:
+                        if sig.parameters["f"].kind == inspect.Parameter.POSITIONAL_ONLY:
+                            pos_args = (*pos_args, f)
+                        else:
+                            call_kwargs["f"] = f
+                    elif has_var_keyword:
+                        call_kwargs["f"] = f
+                    else:
+                        has_var_positional = any(
+                            p.kind == inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values()
+                        )
+                        if has_var_positional:
+                            pos_args = (*pos_args, f)
+                        else:
+                            call_kwargs["f"] = f
+
+                for k, v in extra_kwargs.items():
+                    if k in sig.parameters or has_var_keyword:
+                        call_kwargs[k] = v
+
+                return self.model(*pos_args, **call_kwargs)
             except (ValueError, TypeError):
+                call_kwargs = dict(extra_kwargs)
+                if f is not None:
+                    call_kwargs["f"] = f
+
+                # Attempt 1: modern signature with mode and extra kwargs (including f)
                 try:
-                    return self.model(subj_data, transformed_params, mode=m_arg)
+                    return self.model(subj_data, transformed_params, mode=m_arg, **call_kwargs)
                 except TypeError:
+                    pass
+
+                # Attempt 2: legacy signature with transformations and mode
+                try:
                     p = raw_samples if raw_samples is not None else transformed_params
-                    return self.model(subj_data, p, self.transformations, mode=m_arg)
+                    return self.model(subj_data, p, self.transformations, mode=m_arg, **call_kwargs)
+                except TypeError:
+                    pass
+
+                # Attempt 3: signature without mode
+                try:
+                    return self.model(subj_data, transformed_params, **call_kwargs)
+                except TypeError:
+                    pass
+
+                # Attempt 4: positional f fallback if model expects positional f
+                if f is not None:
+                    try:
+                        return self.model(subj_data, transformed_params, f)
+                    except TypeError:
+                        pass
+                    try:
+                        return self.model(subj_data, transformed_params, f, mode=m_arg)
+                    except TypeError:
+                        pass
+
+                p = raw_samples if raw_samples is not None else transformed_params
+                return self.model(subj_data, p, mode=m_arg)
 
         res = _call_fn(mode)
         if res is None:
@@ -1322,7 +1502,7 @@ class Sampler:
     # Simulation Utility
     # -------------------------------------------------------------------------
 
-    def simulate(
+    def _run_simulation(
         self,
         mode: str = "resample",
         subjects: Union[str, Sequence[int]] = "all",
@@ -1333,51 +1513,40 @@ class Sampler:
         combine_all: bool = False,
         save_to_folder: Optional[str] = None,
         save_dir: Optional[str] = None,
+        fn_list: Optional[List[Callable[..., Any]]] = None,
+        resample: Optional[Union[bool, str]] = None,
+        n_simulations: Optional[int] = None,
+        file_name: Optional[str] = None,
+        by_subject: bool = False,
         **kwargs: Any,
     ) -> Union[SimulatedDataList, Any]:
-        """Simulate data for subjects using fitted parameters.
+        """Internal simulation dispatcher supporting both standard and deep simulation."""
+        # Handle aliases like n_simulations or resample
+        if n_simulations is not None:
+            n_samples = n_simulations
+        elif "n_simulations" in kwargs:
+            n_samples = kwargs.pop("n_simulations")
 
-        By default, returns a `SimulatedDataList` (which is a standard Python list of each subject's
-        simulated data as returned by your model). You can inspect, modify, or put it together however you like.
+        if resample is not None:
+            if isinstance(resample, bool):
+                mode = "resample" if resample else "hyper_params"
+            elif isinstance(resample, str):
+                mode = resample
+        elif "resample" in kwargs:
+            resample_arg = kwargs.pop("resample")
+            if isinstance(resample_arg, bool):
+                mode = "resample" if resample_arg else "hyper_params"
+            elif isinstance(resample_arg, str):
+                mode = resample_arg
 
-        Flexible Reconstruction & Export Options:
-        - `to_df=True`: Reconstructs the per-subject datasets into combined DataFrame(s).
-        - `sub_index=0` (or `sub_index="trials"`): Reconstructs/saves ONLY a specific sub-index to 1 DataFrame.
-        - `combine_all=True` (or `sub_index="all"`): Constructs all sub-dfs across all subjects together into 1 combined DataFrame.
-        - `save_to_folder="path"`: Automatically saves reconstructed DataFrame(s) to CSV in that directory.
+        if file_name is None:
+            file_name = kwargs.pop("filename", None)
 
-        Parameters
-        ----------
-        mode : str, default='resample'
-            Parameter sampling source: 'resample' (from posterior samples), 'hyper_params' (from population priors),
-            'override_params' (custom parameters), or 'mean_params' (subject posterior means).
-        subjects : Union[str, Sequence[int]], default='all'
-            Subjects to simulate.
-        override_params : Optional[Dict[str, Any]], default=None
-            Parameters to use if mode='override_params'.
-        n_samples : int, default=1000
-            Number of draws when mode='hyper_params'.
-        to_df : bool, default=False
-            If True, returns the reconstructed DataFrame(s) instead of the list of subject datas.
-        sub_index : Optional[Union[int, str, Sequence[Union[int, str]]]], default=None
-            Specific sub-index (e.g. 0, 1, or 'phase1') to reconstruct or save.
-            Use 'all' to construct all sub-dfs together into 1 combined DataFrame.
-        combine_all : bool, default=False
-            If True, constructs all sub-dfs across all subjects together into 1 master DataFrame.
-        save_to_folder : Optional[str], default=None
-            If provided, saves the reconstructed DataFrame(s) directly to this directory.
-        save_dir : Optional[str], default=None
-            Alias for save_to_folder.
+        sim_type = "deep_simulate" if fn_list is not None else "simulate"
 
-        Returns
-        -------
-        Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
-            A SimulatedDataList of per-subject data (which supports .to_dataframe() and .save()),
-            or the reconstructed DataFrame(s) if `to_df=True`.
-        """
         # Backwards compatibility for save_kinds / kinds
         if sub_index is None:
-            sub_index = kwargs.get("save_kinds", kwargs.get("kinds", kwargs.get("sub_indices", None)))
+            sub_index = kwargs.pop("save_kinds", kwargs.pop("kinds", kwargs.pop("sub_indices", None)))
 
         sim_data = []
         target_subjects = self.subjects if subjects == "all" else list(subjects)
@@ -1385,6 +1554,7 @@ class Sampler:
 
         for s in target_subjects:
             subj_data = self.data[s]
+            subj_f = fn_list[s] if fn_list is not None else None
 
             if mode == "resample" and self.samples is not None:
                 raw_p = {k: self.samples[k][s] for k in self.params}
@@ -1407,24 +1577,249 @@ class Sampler:
                     raw_p = {k: np.array([self.hyper_params[k]["mean"]]) for k in self.params}
                 transformed_p = {k: self.transformations[k](raw_p[k]) for k in self.params}
 
-            # Invoke model in simulate mode
-            sim_res = self._invoke_model(subj_data, transformed_p, mode="simulate", raw_samples=raw_p)
+            # Invoke model in simulate mode, passing f=subj_f if deep simulation
+            invoke_kwargs = dict(kwargs)
+            if subj_f is not None:
+                invoke_kwargs["f"] = subj_f
+
+            sim_res = self._invoke_model(
+                subj_data,
+                transformed_p,
+                mode="simulate",
+                raw_samples=raw_p,
+                **invoke_kwargs,
+            )
             if sim_res is None:
                 sim_res = subj_data
 
             sim_data.append(sim_res)
 
-        result = SimulatedDataList(sim_data, sampler=self)
+        result = SimulatedDataList(sim_data, sampler=self, simulation_type=sim_type)
 
-        # Save to folder if requested
-        if target_folder:
-            result.save(folder=target_folder, sub_index=sub_index, combine_all=combine_all)
+        # Save to folder / file if requested
+        should_save = bool(
+            target_folder
+            or file_name
+            or kwargs.pop("save", False)
+            or kwargs.pop("save_data", False)
+        )
+        if should_save:
+            result.save(
+                folder=target_folder,
+                sub_index=sub_index,
+                combine_all=combine_all,
+                file_name=file_name,
+                simulation_type=sim_type,
+                by_subject=by_subject,
+                **kwargs,
+            )
 
         # Return reconstructed DataFrame(s) if requested
         if to_df:
             return result.to_dataframe(sub_index=sub_index, combine_all=combine_all)
 
         return result
+
+    def simulate(
+        self,
+        mode: str = "resample",
+        subjects: Union[str, Sequence[int]] = "all",
+        override_params: Optional[Dict[str, Any]] = None,
+        n_samples: int = 1000,
+        to_df: bool = False,
+        sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        combine_all: bool = False,
+        save_to_folder: Optional[str] = None,
+        save_dir: Optional[str] = None,
+        resample: Optional[Union[bool, str]] = None,
+        n_simulations: Optional[int] = None,
+        file_name: Optional[str] = None,
+        by_subject: bool = False,
+        **kwargs: Any,
+    ) -> Union[SimulatedDataList, Any]:
+        """Simulate data for subjects using fitted parameters.
+
+        By default, returns a `SimulatedDataList` (which is a standard Python list of each subject's
+        simulated data as returned by your model). You can inspect, modify, or put it together however you like.
+
+        Flexible Reconstruction & Export Options:
+        - `to_df=True`: Reconstructs the per-subject datasets into combined DataFrame(s).
+        - `sub_index=0` (or `sub_index="trials"`): Reconstructs/saves ONLY a specific sub-index to 1 DataFrame.
+        - `combine_all=True` (or `sub_index="all"`): Constructs all sub-dfs across all subjects together into 1 combined DataFrame.
+        - `save_to_folder="path"`: Automatically saves reconstructed DataFrame(s) to CSV in that directory.
+        - `file_name="my_custom_name"`: Custom output filename (e.g. 'my_custom_name.csv').
+
+        File Naming Conventions:
+        - Single file: 'simulate_{model_name}.csv' (or custom file_name).
+        - Several files: sub-index names in folder 'simulate'.
+
+        Parameters
+        ----------
+        mode : str, default='resample'
+            Parameter sampling source: 'resample' (from posterior samples), 'hyper_params' (from population priors),
+            'override_params' (custom parameters), or 'mean_params' (subject posterior means).
+        subjects : Union[str, Sequence[int]], default='all'
+            Subjects to simulate.
+        override_params : Optional[Dict[str, Any]], default=None
+            Parameters to use if mode='override_params'.
+        n_samples : int, default=1000
+            Number of draws when mode='hyper_params' (can also be passed as n_simulations).
+        to_df : bool, default=False
+            If True, returns the reconstructed DataFrame(s) instead of the list of subject datas.
+        sub_index : Optional[Union[int, str, Sequence[Union[int, str]]]], default=None
+            Specific sub-index (e.g. 0, 1, or 'phase1') to reconstruct or save.
+            Use 'all' to construct all sub-dfs together into 1 combined DataFrame.
+        combine_all : bool, default=False
+            If True, constructs all sub-dfs across all subjects together into 1 master DataFrame.
+        save_to_folder : Optional[str], default=None
+            If provided, saves the reconstructed DataFrame(s) directly to this directory.
+        save_dir : Optional[str], default=None
+            Alias for save_to_folder.
+        resample : Optional[Union[bool, str]], default=None
+            If True or 'resample', draws from posterior samples. If False or 'hyper_params', draws from population priors.
+        n_simulations : Optional[int], default=None
+            Alias for n_samples.
+        file_name : Optional[str], default=None
+            Custom file name for saved data.
+        by_subject : bool, default=False
+            If True, saves separate files per subject.
+        **kwargs : Any
+            Additional arguments forwarded to simulation and model calls.
+
+        Returns
+        -------
+        Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
+            A SimulatedDataList of per-subject data (which supports .to_dataframe() and .save()),
+            or the reconstructed DataFrame(s) if `to_df=True`.
+        """
+        return self._run_simulation(
+            mode=mode,
+            subjects=subjects,
+            override_params=override_params,
+            n_samples=n_samples,
+            to_df=to_df,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            save_to_folder=save_to_folder,
+            save_dir=save_dir,
+            fn_list=None,
+            resample=resample,
+            n_simulations=n_simulations,
+            file_name=file_name,
+            by_subject=by_subject,
+            **kwargs,
+        )
+
+    def deep_simulate(
+        self,
+        functions: Union[Callable[..., Any], Sequence[Callable[..., Any]]],
+        mode: str = "resample",
+        subjects: Union[str, Sequence[int]] = "all",
+        override_params: Optional[Dict[str, Any]] = None,
+        n_samples: int = 1000,
+        to_df: bool = False,
+        sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+        combine_all: bool = False,
+        save_to_folder: Optional[str] = None,
+        save_dir: Optional[str] = None,
+        resample: Optional[Union[bool, str]] = None,
+        n_simulations: Optional[int] = None,
+        file_name: Optional[str] = None,
+        by_subject: bool = False,
+        **kwargs: Any,
+    ) -> Union[SimulatedDataList, Any]:
+        """Deep simulate data for subjects, passing subject-specific functions down to individual models.
+
+        When invoking each subject's model instance, passes `functions[i]` as an additional argument `f`
+        to subject i's model call (alongside the subject's data and parameters).
+
+        File Naming Conventions:
+        - Single file: 'deep_simulate_{model_name}.csv' (or custom file_name).
+        - Several files: sub-index names in folder 'deep_simulate'.
+
+        Parameters
+        ----------
+        functions : Union[Callable, Sequence[Callable]]
+            A single callable function or a list of callable functions matching the number of subjects in the dataset.
+            - If a single callable is provided: the same function is used for every subject.
+            - If a list/sequence of callables is provided: len(functions) must match self.n_subjects,
+              and functions[i] is passed as `f` to subject i's model call.
+        mode : str, default='resample'
+            Parameter sampling source: 'resample' (from posterior samples), 'hyper_params' (from population priors),
+            'override_params' (custom parameters), or 'mean_params' (subject posterior means).
+        subjects : Union[str, Sequence[int]], default='all'
+            Subjects to simulate.
+        override_params : Optional[Dict[str, Any]], default=None
+            Parameters to use if mode='override_params'.
+        n_samples : int, default=1000
+            Number of draws when mode='hyper_params' (can also be passed as n_simulations).
+        to_df : bool, default=False
+            If True, returns the reconstructed DataFrame(s) instead of the list of subject datas.
+        sub_index : Optional[Union[int, str, Sequence[Union[int, str]]]] = None
+            Specific sub-index (e.g. 0, 1, or 'phase1') to reconstruct or save.
+            Use 'all' to construct all sub-dfs together into 1 combined DataFrame.
+        combine_all : bool, default=False
+            If True, constructs all sub-dfs across all subjects together into 1 master DataFrame.
+        save_to_folder : Optional[str], default=None
+            If provided, saves the reconstructed DataFrame(s) directly to this directory.
+        save_dir : Optional[str], default=None
+            Alias for save_to_folder.
+        resample : Optional[Union[bool, str]], default=None
+            If True or 'resample', draws from posterior samples. If False or 'hyper_params', draws from population priors.
+        n_simulations : Optional[int], default=None
+            Alias for n_samples.
+        file_name : Optional[str], default=None
+            Custom file name for saved data.
+        by_subject : bool, default=False
+            If True, saves separate files per subject.
+        **kwargs : Any
+            Additional keyword arguments (e.g. `n_simulations`, `resample`) passed to simulation and the model.
+
+        Returns
+        -------
+        Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
+            A SimulatedDataList of per-subject data (which supports .to_dataframe() and .save()),
+            or the reconstructed DataFrame(s) if `to_df=True`.
+        """
+        # Validate and normalize functions input
+        if callable(functions):
+            fn_list = [functions] * self.n_subjects
+        elif isinstance(functions, (list, tuple, Sequence)) and not isinstance(functions, (str, bytes)):
+            if len(functions) != self.n_subjects:
+                raise ValueError(
+                    f"Length of 'functions' list ({len(functions)}) must match the number of "
+                    f"subjects in the dataset ({self.n_subjects})."
+                )
+            for i, fn in enumerate(functions):
+                if not callable(fn):
+                    raise TypeError(
+                        f"Item at index {i} in 'functions' is not callable (got {type(fn).__name__}). "
+                        f"All items in 'functions' must be callable functions."
+                    )
+            fn_list = list(functions)
+        else:
+            raise TypeError(
+                f"'functions' must be a single callable function or a list of callable functions "
+                f"matching the number of subjects ({self.n_subjects}), but got {type(functions).__name__}."
+            )
+
+        return self._run_simulation(
+            mode=mode,
+            subjects=subjects,
+            override_params=override_params,
+            n_samples=n_samples,
+            to_df=to_df,
+            sub_index=sub_index,
+            combine_all=combine_all,
+            save_to_folder=save_to_folder,
+            save_dir=save_dir,
+            fn_list=fn_list,
+            resample=resample,
+            n_simulations=n_simulations,
+            file_name=file_name,
+            by_subject=by_subject,
+            **kwargs,
+        )
 
     def to_dataframes(
         self,
@@ -1445,13 +1840,18 @@ class Sampler:
     def save_simulated_data(
         self,
         sim_data: Sequence[Any],
-        folder: str,
+        folder: Optional[str] = None,
         sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
         combine_all: bool = False,
         file_format: str = "csv",
+        file_name: Optional[str] = None,
+        simulation_type: Optional[str] = None,
+        by_subject: bool = False,
         **kwargs: Any,
     ) -> Dict[Union[int, str], str]:
-        """Save reconstructed simulated DataFrames directly to a folder."""
+        """Save reconstructed simulated DataFrames directly to a folder following naming conventions."""
+        if file_name is None:
+            file_name = kwargs.pop("filename", None)
         return _save_reconstructed_dataframes(
             sim_data,
             folder=folder,
@@ -1459,6 +1859,9 @@ class Sampler:
             combine_all=combine_all,
             sampler=self,
             file_format=file_format,
+            file_name=file_name,
+            simulation_type=simulation_type,
+            by_subject=by_subject,
             **kwargs,
         )
 

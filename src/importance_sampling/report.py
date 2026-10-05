@@ -44,9 +44,20 @@ def _is_notebook() -> bool:
 class ReportDashboard:
     """A self-contained, interactive HTML dashboard for model diagnostics."""
 
-    def __init__(self, html_content: str, filename: Optional[str] = None, figure: Any = None):
+    def __init__(
+        self,
+        html_content: str,
+        filename: Optional[str] = None,
+        figure: Any = None,
+        model_name: Optional[str] = None,
+    ):
         self.html_content = html_content
-        self.filename = filename
+        self.model_name = model_name or "model"
+        # Single model report defaults to report_{model_name}.html and not just report
+        if filename in (None, "", "report", "report.html"):
+            self.filename = f"report_{self.model_name}.html"
+        else:
+            self.filename = filename if str(filename).endswith(".html") else f"{filename}.html"
         self.figure = figure
 
     def _repr_html_(self) -> str:
@@ -63,9 +74,17 @@ class ReportDashboard:
         dest = f" (saved to '{self.filename}')" if self.filename else ""
         return f"<ReportDashboard{dest}>"
 
-    def save(self, filename: str) -> str:
-        """Save the dashboard to an HTML file."""
-        abs_path = os.path.abspath(filename)
+    def save(self, filename: Optional[str] = None) -> str:
+        """Save the dashboard to an HTML file.
+
+        Defaults to 'report_{model_name}.html' if no custom filename is specified.
+        """
+        target = filename or self.filename or f"report_{self.model_name}.html"
+        if target in ("report", "report.html"):
+            target = f"report_{self.model_name}.html"
+        if not target.endswith(".html"):
+            target = f"{target}.html"
+        abs_path = os.path.abspath(target)
         dir_name = os.path.dirname(abs_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
@@ -1527,10 +1546,20 @@ def create_report(
 </html>
 """
 
-    dashboard = ReportDashboard(html_content, filename=filename, figure=fig_fit)
+    model_name = getattr(sampler, "model_name", "model")
+    eff_filename = filename
+    if eff_filename in ("report", "report.html") or eff_filename is True:
+        eff_filename = f"report_{model_name}.html"
 
-    if filename:
-        dashboard.save(filename)
+    dashboard = ReportDashboard(
+        html_content,
+        filename=eff_filename or f"report_{model_name}.html",
+        figure=fig_fit,
+        model_name=model_name,
+    )
+
+    if eff_filename:
+        dashboard.save(eff_filename)
 
     if show:
         if _is_notebook():

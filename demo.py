@@ -77,7 +77,7 @@ def simulate_data(n_subjects=10, n_trials=30, seed=42):
 # =============================================================================
 # 2. Define the Model (Full Information Two-Armed Bandit)
 # =============================================================================
-def q_learning_model(subj_data, parameters, mode="log_likelihood"):
+def q_learning_model(subj_data, parameters, mode="log_likelihood", f=None):
     """Full-information two-armed bandit Q-learning model.
 
     Parameters are automatically transformed into their bounds by Sampler:
@@ -121,7 +121,14 @@ def q_learning_model(subj_data, parameters, mode="log_likelihood"):
         Q2 += alpha * (reward2[i] - Q2)
 
     if mode == "simulate":
-        return np.array(p_choices)
+        # Average choice probabilities across parameter draws
+        p_arr = np.array(p_choices)
+        mean_p = np.mean(p_arr, axis=1) if p_arr.ndim > 1 else p_arr
+        res = dict(subj_data)
+        res["mean_choice_probability"] = mean_p
+        if f is not None:
+            res["deep_eval"] = f(res)
+        return res
     return log_likelihood
 
 
@@ -178,7 +185,13 @@ def main():
     print(f"• simulate(): returned data for {len(sim_data)} subjects.")
     print(f"  Subject 0 mean_choice_probability (first 5 trials): {np.round(sim_data[0]['mean_choice_probability'][:5], 3)}")
 
-    # B. Save model
+    # B. Deep Simulate: pass subject-specific policy/reward functions down to individual models
+    eval_fn = lambda s_res: float(np.mean(s_res["mean_choice_probability"]))
+    deep_sim_data = sampler.deep_simulate(functions=eval_fn)
+    print(f"• deep_simulate(): delegated evaluation function to {len(deep_sim_data)} subjects.")
+    print(f"  Subject 0 deep evaluation metric: {deep_sim_data[0]['deep_eval']:.4f}")
+
+    # C. Save model
     saved_path = sampler.save_model("demo_model", directory="saved_models")
     print(f"• save_model(): successfully saved to '{saved_path}'")
 

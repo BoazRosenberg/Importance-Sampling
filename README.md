@@ -344,6 +344,55 @@ sampler.simulate(save_to_folder="simulated_output", sub_index=0)
 
 ---
 
+### Deep Simulation Method: `sampler.deep_simulate`
+
+```python
+sampler.deep_simulate(
+    functions: Union[Callable, Sequence[Callable]],
+    mode: str = "resample",
+    subjects: Union[str, Sequence[int]] = "all",
+    override_params: Optional[Dict[str, Any]] = None,
+    n_samples: int = 1000,
+    to_df: bool = False,
+    sub_index: Optional[Union[int, str, Sequence[Union[int, str]]]] = None,
+    combine_all: bool = False,
+    save_to_folder: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    resample: Optional[Union[bool, str]] = None,
+    n_simulations: Optional[int] = None,
+    **kwargs: Any,
+) -> Union[SimulatedDataList, pd.DataFrame, Dict[Union[int, str], pd.DataFrame]]
+```
+
+Enables deep simulations by passing subject-specific functions down to individual subject models. When invoking each subject's model instance, delegates `functions[i]` as an additional argument `f` to subject $i$'s model call alongside the subject's data and parameters.
+
+#### Core Capabilities
+1. **Single Callable or List Support**:
+   - **Single Callable**: If `functions` is a single callable, it is automatically broadcast to every subject in the dataset.
+   - **List of Callables**: If `functions` is a list, `len(functions)` must match the number of subjects in the dataset ($N_{subjects}$), and each `functions[i]` is mapped to `f` for subject $i$.
+2. **Strict Validation**:
+   - Raises an informative `ValueError` if a list length does not match $N_{subjects}$.
+   - Raises an informative `TypeError` if `functions` is neither callable nor a sequence of callables.
+3. **Identical Output Structure**:
+   - Accepts all arguments supported by `simulate()` (`resample`, `n_simulations`, `to_df`, `combine_all`, `save_to_folder`).
+   - Returns a `SimulatedDataList` (or reconstructed `DataFrame` if `to_df=True`) in the exact same format and structure as `simulate()`.
+
+#### Example Usage
+
+```python
+# 1. Single function passed to all subjects:
+sim_dat = sampler.deep_simulate(functions=policy_eval_fn)
+
+# 2. Subject-specific functions:
+subject_fns = [agent_policy_fn_0, agent_policy_fn_1, agent_policy_fn_2]
+sim_dat = sampler.deep_simulate(functions=subject_fns)
+
+# 3. Direct export to DataFrame with custom simulations count:
+df = sampler.deep_simulate(functions=subject_fns, to_df=True, n_simulations=500)
+```
+
+---
+
 ### Interactive Plotly Report: `sampler.create_report`
 
 ```python
