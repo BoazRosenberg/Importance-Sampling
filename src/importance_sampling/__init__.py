@@ -4,7 +4,7 @@ A minimal, robust Python package for fitting cognitive and computational models
 using Iterative Importance Sampling (IIS).
 """
 
-from importance_sampling.sampler import Sampler, SimulatedDataList, load_model
+from importance_sampling.sampler import Sampler, SimulatedDataList, load_model, export_subject_summary
 from importance_sampling.report import create_report, compare_models, compare_parameters
 from importance_sampling.utils import (
     logsumexp,
@@ -21,6 +21,7 @@ __all__ = [
     "Sampler",
     "SimulatedDataList",
     "load_model",
+    "export_subject_summary",
     "save_model",
     "create_report",
     "compare_models",

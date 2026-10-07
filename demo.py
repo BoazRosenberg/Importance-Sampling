@@ -221,6 +221,10 @@ def main():
     except Exception as e:
         print(f"• create_report(): {e}")
 
+    # E. Subject Summary Export
+    summary_df = sampler.export_subject_summary(file_name="demo_subject_summary.csv")
+    print(f"• export_subject_summary(): exported {len(summary_df)} rows to 'demo_subject_summary.csv'")
+
     print("\nDemo finished successfully!")
     print("=" * 65)
 

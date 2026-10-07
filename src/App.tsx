@@ -2712,6 +2712,28 @@ df = sampler.deep_simulate(functions=subject_fns, to_df=True)`}
 
               <div>
                 <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
+                  Export Subject Summary (<code>sampler.export_subject_summary</code>)
+                </h2>
+                <p className="mb-2">
+                  Exports a CSV table of per-subject metrics with columns: <code>subject</code>, <code>parameter</code>, <code>mean</code>, <code>ci_high</code>, <code>ci_low</code>.
+                </p>
+                <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs overflow-x-auto">
+{`# Export subject summary table:
+summary_df = sampler.export_subject_summary("subject_summary.csv")
+print(summary_df.head())
+#   subject      parameter     mean  ci_high   ci_low
+# 0       0  loglikelihood -13.5866 -10.2104 -18.4521
+# 1       0             lr   0.3345   0.4521   0.2180
+# 2       0       inv_temp   3.1582   4.0215   2.3104`}
+                </pre>
+                <ul className="list-disc pl-6 space-y-1.5 text-xs text-[#59636e] mt-3">
+                  <li><strong>Log-Likelihood Mean</strong>: Computed in log scale via <code>logsumexp(LL) - log(N)</code> (averaging likelihoods before taking log).</li>
+                  <li><strong>Pre-Transformation CI</strong>: Parameter means and 95% CI bounds are calculated in raw particle space before being transformed.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold border-b border-[#d1d9e0] pb-2 mb-3">
                   Single Model Report (<code>sampler.create_report</code>)
                 </h2>
                 <pre className="bg-[#f6f8fa] border border-[#d1d9e0] p-3 rounded font-mono text-xs">

@@ -13,5 +13,10 @@
   "tests/test_file_naming.py::TestFileNamingConventions::test_deep_simulate_default_single_file_name",
   "tests/test_file_naming.py::TestFileNamingConventions::test_several_files_put_in_simulate_or_deep_simulate_folder",
   "tests/test_file_naming.py::TestFileNamingConventions::test_simulate_default_single_file_name",
-  "tests/test_file_naming.py::TestFileNamingConventions::test_single_model_report_default_name"
+  "tests/test_file_naming.py::TestFileNamingConventions::test_single_model_report_default_name",
+  "tests/test_subject_summary.py::TestExportSubjectSummary::test_default_filename_and_module_function",
+  "tests/test_subject_summary.py::TestExportSubjectSummary::test_export_subject_summary_columns_and_format",
+  "tests/test_subject_summary.py::TestExportSubjectSummary::test_loglikelihood_mean_and_ci",
+  "tests/test_subject_summary.py::TestExportSubjectSummary::test_parameter_mean_and_ci_before_transformation",
+  "tests/test_subject_summary.py::TestExportSubjectSummary::test_unfitted_model_raises_error"
 ]

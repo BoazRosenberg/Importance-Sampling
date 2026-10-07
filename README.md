@@ -429,6 +429,38 @@ df = sampler.deep_simulate(functions=subject_fns, to_df=True, n_simulations=500)
 
 ---
 
+### Export Subject Summary: `sampler.export_subject_summary`
+
+```python
+summary_df = sampler.export_subject_summary(
+    file_name: Optional[str] = None,
+    save_to_folder: Optional[str] = None,
+    subjects: Union[str, Sequence[int]] = "all",
+    ci: float = 0.95,
+) -> pd.DataFrame
+```
+
+Exports a per-subject summary table to CSV (default name: `subject_summary_{model_name}.csv`). Also available as `export_subject_summary(sampler, ...)`.
+
+The exported CSV and returned DataFrame follow the exact structure:
+`subject, parameter, mean, ci_high, ci_low`
+
+* **`loglikelihood` row**: Computes the mean likelihood per subject in log scale as $\log(\text{mean}(\text{likelihood})) = \text{logsumexp}(LL) - \log(N)$ (using `logsumexp` to correctly average likelihoods before taking the log, rather than averaging log-likelihoods), plus the 95% credible interval (`ci_high`, `ci_low`).
+* **Parameter rows**: For every model parameter, the mean and 95% CI limits are calculated on raw samples before transformation and then transformed:
+  $$\text{mean} = f(\text{mean}(\theta_{\text{raw}})), \quad \text{ci\_high} = f(\text{percentile}_{97.5}(\theta_{\text{raw}})), \quad \text{ci\_low} = f(\text{percentile}_{2.5}(\theta_{\text{raw}}))$$
+
+```python
+# Export summary to CSV:
+df = sampler.export_subject_summary("my_study_summary.csv")
+print(df.head())
+#   subject      parameter     mean  ci_high   ci_low
+# 0       0  loglikelihood -13.5866 -10.2104 -18.4521
+# 1       0             lr   0.3345   0.4521   0.2180
+# 2       0       inv_temp   3.1582   4.0215   2.3104
+```
+
+---
+
 ### Interactive Plotly Report: `sampler.create_report`
 
 ```python

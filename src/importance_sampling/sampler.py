@@ -1108,6 +1108,7 @@ class Sampler:
             workers = max(1, int(effective_n_jobs))
 
         subject_samples: Dict[str, List[np.ndarray]] = {param: [] for param in self.params}
+        subject_samples["log_likelihood"] = []
         mean_params: Dict[str, List[float]] = {param: [] for param in self.params}
         log_likelihoods: List[float] = []
 
@@ -1131,6 +1132,7 @@ class Sampler:
                 for param in self.params:
                     subject_samples[param].append(resample[param])
                     mean_params[param].append(s_mean[param])
+                subject_samples["log_likelihood"].append(resample["log_likelihood"])
                 log_likelihoods.append(log_mean_ll)
                 finished_num = s + 1
                 if pbar is not None:
@@ -1171,6 +1173,7 @@ class Sampler:
                     for param in self.params:
                         subject_samples[param].append(resample[param])
                         mean_params[param].append(s_mean[param])
+                    subject_samples["log_likelihood"].append(resample["log_likelihood"])
                     log_likelihoods.append(log_mean_ll)
 
         if pbar is not None:
@@ -2086,11 +2089,174 @@ class Sampler:
             renderer=renderer,
         )
 
+    def export_subject_summary(
+        self,
+        file_name: Optional[str] = None,
+        save_to_folder: Optional[str] = None,
+        save_dir: Optional[str] = None,
+        subjects: Union[str, Sequence[int]] = "all",
+        ci: float = 0.95,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        """Export per-subject summary table to CSV.
+
+        For each subject, computes:
+        - loglikelihood: mean likelihood (in log scale, calculated as log(mean(likelihood)) = logsumexp(LL) - log(N))
+          and 95% interval for the likelihood.
+        - each parameter: mean and 95% CI limits calculated before transformation and then transformed.
+
+        Format of exported CSV:
+            subject, parameter, mean, ci_high, ci_low
+
+        Parameters
+        ----------
+        file_name : Optional[str], default=None
+            Name of the output CSV file. Defaults to 'subject_summary_{model_name}.csv'.
+        save_to_folder : Optional[str], default=None
+            Directory where the CSV should be saved. Defaults to current directory ('.').
+        save_dir : Optional[str], default=None
+            Alias for save_to_folder.
+        subjects : Union[str, Sequence[int]], default='all'
+            Subjects to include in the summary table.
+        ci : float, default=0.95
+            Confidence / credible interval coverage (e.g. 0.95 for 95% interval).
+        **kwargs : Any
+            Additional options (e.g. filename, folder).
+
+        Returns
+        -------
+        pd.DataFrame
+            The subject summary DataFrame with columns:
+            ['subject', 'parameter', 'mean', 'ci_high', 'ci_low'].
+        """
+        if self.samples is None:
+            raise ValueError(
+                "Model must be fitted before exporting subject summary. "
+                "Run iterative_model_fit() or fit() first."
+            )
+
+        if not (0.0 < ci < 1.0):
+            raise ValueError(f"Confidence interval 'ci' must be between 0 and 1, got {ci}")
+
+        alpha = (1.0 - ci) / 2.0
+        lower_p = alpha * 100.0
+        upper_p = (1.0 - alpha) * 100.0
+
+        target_subjects = self.subjects if subjects == "all" else list(subjects)
+
+        def _apply_transform(fn: Callable[..., Any], val: float) -> float:
+            try:
+                res = fn(val)
+                if isinstance(res, (np.ndarray, list)):
+                    arr = np.asarray(res)
+                    return float(arr.item() if arr.size == 1 else arr.flat[0])
+                return float(res)
+            except Exception:
+                arr_res = fn(np.array([val]))
+                arr = np.asarray(arr_res)
+                return float(arr.item() if arr.size == 1 else arr.flat[0])
+
+        rows: List[Dict[str, Any]] = []
+
+        for s in target_subjects:
+            # 1. Log-likelihood
+            if "log_likelihood" in self.samples and len(self.samples["log_likelihood"]) > s:
+                ll_s = np.asarray(self.samples["log_likelihood"][s], dtype=np.float64)
+            else:
+                raw_p = {param: self.samples[param][s] for param in self.params}
+                transformed_p = {param: self.transformations[param](raw_p[param]) for param in self.params}
+                ll_s = np.asarray(
+                    self._invoke_model(self.data[s], transformed_p, mode="log_likelihood", raw_samples=raw_p),
+                    dtype=np.float64,
+                )
+
+            # Mask out any invalid log-likelihoods
+            ll_valid = ll_s[np.isfinite(ll_s)]
+            if len(ll_valid) == 0:
+                ll_valid = ll_s
+
+            n_ll = len(ll_valid)
+            ll_mean = float(logsumexp(ll_valid) - np.log(n_ll))
+            ll_ci_low = float(np.percentile(ll_valid, lower_p))
+            ll_ci_high = float(np.percentile(ll_valid, upper_p))
+
+            rows.append({
+                "subject": s,
+                "parameter": "loglikelihood",
+                "mean": ll_mean,
+                "ci_high": ll_ci_high,
+                "ci_low": ll_ci_low,
+            })
+
+            # 2. Parameters
+            for p in self.params:
+                raw_vals = np.asarray(self.samples[p][s], dtype=np.float64)
+                raw_mean = float(np.mean(raw_vals))
+                raw_ci_low = float(np.percentile(raw_vals, lower_p))
+                raw_ci_high = float(np.percentile(raw_vals, upper_p))
+
+                transform_fn = self.transformations[p]
+                t_mean = _apply_transform(transform_fn, raw_mean)
+                t_low = _apply_transform(transform_fn, raw_ci_low)
+                t_high = _apply_transform(transform_fn, raw_ci_high)
+
+                ci_high_val = max(t_high, t_low)
+                ci_low_val = min(t_high, t_low)
+
+                rows.append({
+                    "subject": s,
+                    "parameter": p,
+                    "mean": t_mean,
+                    "ci_high": ci_high_val,
+                    "ci_low": ci_low_val,
+                })
+
+        df = pd.DataFrame(rows, columns=["subject", "parameter", "mean", "ci_high", "ci_low"])
+
+        # Determine target folder and file name
+        fn = file_name or kwargs.pop("filename", None)
+        if fn is None or not str(fn).strip():
+            fn = f"subject_summary_{self.model_name}.csv" if self.model_name else "subject_summary.csv"
+        else:
+            fn = str(fn).strip()
+            if not fn.lower().endswith(".csv"):
+                fn = f"{fn}.csv"
+
+        target_folder = save_to_folder or save_dir or kwargs.pop("folder", None) or "."
+        os.makedirs(target_folder, exist_ok=True)
+        out_path = os.path.join(target_folder, fn)
+        df.to_csv(out_path, index=False)
+
+        abs_p = os.path.abspath(out_path)
+        print(f"Saved subject summary ({len(df)} rows) to: {abs_p}")
+
+        return df
+
 
 # -----------------------------------------------------------------------------
-# Module Function: Load Model
+# Module Functions: Load Model & Export Summary
 # -----------------------------------------------------------------------------
 
 def load_model(filename: str, directory: str = "saved_models") -> Sampler:
     """Load a previously saved Sampler instance from disk."""
     return _load_model_func(filename, directory=directory)
+
+
+def export_subject_summary(
+    sampler: Sampler,
+    file_name: Optional[str] = None,
+    save_to_folder: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    subjects: Union[str, Sequence[int]] = "all",
+    ci: float = 0.95,
+    **kwargs: Any,
+) -> pd.DataFrame:
+    """Export per-subject summary table to CSV from a fitted Sampler instance."""
+    return sampler.export_subject_summary(
+        file_name=file_name,
+        save_to_folder=save_to_folder,
+        save_dir=save_dir,
+        subjects=subjects,
+        ci=ci,
+        **kwargs,
+    )
